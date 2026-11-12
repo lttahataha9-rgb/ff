@@ -1,0 +1,31 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install theos + SDKs
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          git clone --depth 1 https://github.com/theos/sdks "$HOME/theos/sdks"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build package
+        run: make clean package
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: ff-deb
+          path: packages/*.deb
+          if-no-files-found: error

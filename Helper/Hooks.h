@@ -1,0 +1,1003 @@
+#import "vinhtran.hpp"
+#import "loading.hxx"
+#include <fstream>
+#define FMT_HEADER_ONLY
+#include "fmt/core.h"
+
+struct Vars_t
+{
+    bool Enable = {};
+    bool Aimbot = {};
+    float AimFov = {};
+    int AimCheck = {};
+    int AimType = {};
+    int AimWhen = {};
+    bool isAimFov = {};
+    const char *dir[4] = {"always when", "when shootes", "when scopes", "when shoots i scopes"};
+    bool lines = {};
+    bool Box = {};
+    bool Outline = {};
+    bool Name = {};
+    bool Health = {};
+    bool Distance = {};
+    bool fovaimglow = {};
+    bool circlepos = {};
+    bool skeleton = {};
+    bool OOF = {};
+    bool enemycount = {};
+    float fovLineColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    ImVec4 boxColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    float AimSpeed = 100000000.0f;
+
+    // ---- ported from X96 2Ripper: Telekill / Fly V2 / Ninja Run ----
+    bool Telekill = {};
+    bool fly = {};        // RUNN (ninja run)
+    bool Flyingtest = {}; // Fly V2
+    float flySpeed = 0.75f;
+    float flyhei = 0.0f;
+    float khoangcach = 10.0f;
+} Vars;
+
+class game_sdk_t
+{
+public:
+    void init();
+    int (*GetHp)(void *player);
+    void *(*Curent_Match)();
+    void *(*GetLocalPlayer)(void *Game);
+    void *(*GetHeadPositions)(void *player);
+    Vector3 (*get_position)(void *player);
+    void *(*Component_GetTransform)(void *player);
+    void *(*get_camera)();
+    Vector3 (*WorldToViewpoint)(void*, Vector3, int);
+    bool (*get_isVisible)(void *player);
+    bool (*get_isLocalTeam)(void *player);
+    bool (*get_IsDieing)(void *player);
+    int (*get_MaxHP)(void *player);
+    Vector3 (*GetForward)(void *player);
+    void (*set_aim)(void *, Quaternion look);
+    bool (*get_IsSighting)(void *player);
+    bool (*get_IsFiring)(void *player);
+    monoString *(*name)(void *player);
+    void *(*_GetHeadPositions)(void *);
+    void *(*_newHipMods)(void *);
+    void *(*_GetLeftAnkleTF)(void *);
+    void *(*_GetRightAnkleTF)(void *);
+    void *(*_GetLeftToeTF)(void *);
+    void *(*_GetRightToeTF)(void *);
+    void *(*_getLeftHandTF)(void *);
+    void *(*_getRightHandTF)(void *);
+    void *(*_getLeftForeArmTF)(void *);
+    void *(*_getRightForeArmTF)(void *);
+};
+
+game_sdk_t *game_sdk = new game_sdk_t();
+
+void game_sdk_t::init()
+{
+    // ======================== [تم التحديث: GetHp] ========================
+    // القديم: 0x54A4CA4
+    // الجديد: 0x56AA7C8
+    this->GetHp = (int (*)(void *))getRealOffset(oxo("0x56AA7C8"));
+
+    // ======================== [تم التحديث: Curent_Match] ========================
+    // القديم: 0x5997610
+    // الجديد: 0x591B898
+    this->Curent_Match = (void *(*)())getRealOffset(oxo("0x591B898"));
+
+    // ======================== [تم التحديث: GetLocalPlayer] ========================
+    // القديم: 0x304E1A4
+    // الجديد: 0x320FF7C
+    this->GetLocalPlayer = (void *(*)(void *))getRealOffset(oxo("0x320FF7C"));
+
+    // ======================== [تم التحديث: GetHeadPositions] ========================
+    // القديم: 0x54C43D4
+    // الجديد: 0x56CA948
+    this->GetHeadPositions = (void *(*)(void *))getRealOffset(oxo("0x56CA948"));
+
+    // ======================== [تم التحديث: get_position] ========================
+    // القديم: 0x929B730
+    // الجديد: 0x8D6C1EC
+    this->get_position = (Vector3(*)(void *))getRealOffset(oxo("0x8D6C1EC"));
+
+    // ======================== [تم التحديث: Component_GetTransform] ========================
+    // القديم: 0x9289418
+    // الجديد: 0x8D59C2C
+    this->Component_GetTransform = (void *(*)(void *))getRealOffset(oxo("0x8D59C2C"));
+
+    // ======================== [تم التحديث: get_camera] ========================
+    // القديم: 0x922F64C
+    // الجديد: 0x8CFF0B4
+    this->get_camera = (void *(*)())getRealOffset(oxo("0x8CFF0B4"));
+
+    // ======================== [تم التحديث: WorldToViewpoint] ========================
+    // القديم: 0x922EFCC
+    // الجديد: 0x8CFEA34
+    this->WorldToViewpoint = (Vector3(*)(void*, Vector3, int))getRealOffset(oxo("0x8CFEA34"));
+
+    // ======================== [تم التحديث: get_isVisible] ========================
+    // القديم: 0x543737C
+    // الجديد: 0x563B10C
+    this->get_isVisible = (bool (*)(void *))getRealOffset(oxo("0x563B10C"));
+
+    // ======================== [تم التحديث: get_isLocalTeam] ========================
+    // القديم: 0x5450FE4
+    // الجديد: 0x5655F1C
+    this->get_isLocalTeam = (bool (*)(void *))getRealOffset(oxo("0x5655F1C"));
+
+    // ======================== [تم التحديث: get_IsDieing] ========================
+    // القديم: 0x5418A3C
+    // الجديد: 0x561C768
+    this->get_IsDieing = (bool (*)(void *))getRealOffset(oxo("0x561C768"));
+
+    // ======================== [تم التحديث: get_MaxHP] ========================
+    // القديم: 0x54A4DB4
+    // الجديد: 0x5613110
+    this->get_MaxHP = (int (*)(void *))getRealOffset(oxo("0x5613110"));
+
+    // ======================== [تم التحديث: GetForward] ========================
+    // القديم: 0x929C128
+    // الجديد: 0x8D6CBE4
+    this->GetForward = (Vector3(*)(void *))getRealOffset(oxo("0x8D6CBE4"));
+
+    // ======================== [تم التحديث: set_aim] ========================
+    // القديم: 0x5433004
+    // الجديد: 0x5636F80
+    this->set_aim = (void (*)(void *, Quaternion))getRealOffset(oxo("0x5636F80"));
+
+    // ======================== [تم التحديث: get_IsSighting] ========================
+    // القديم: 0x5425F84
+    // الجديد: 0x5629c84
+    this->get_IsSighting = (bool (*)(void *))getRealOffset(oxo("0x5629c84"));
+
+    // ======================== [تم التحديث: get_IsFiring] ========================
+    // القديم: 0x541B560
+    // الجديد: 0x56200F0
+    this->get_IsFiring = (bool (*)(void *))getRealOffset(oxo("0x56200F0"));
+
+    // ======================== [تم التحديث: name] ========================
+    // القديم: 0x542D3A4
+    // الجديد: 0x5630F10
+    this->name = (monoString * (*)(void *player)) getRealOffset(oxo("0x5630F10"));
+
+    // ======================== [تم التحديث: _GetHeadPositions] ========================
+    // القديم: 0x54C43D4
+    // الجديد: 0x56CA948
+    this->_GetHeadPositions = (void *(*)(void *))getRealOffset(oxo("0x56CA948"));
+
+    // ======================== [تم التحديث: _newHipMods] ========================
+    // القديم: 0x54C4584
+    // الجديد: 0x56CAAF8
+    this->_newHipMods = (void *(*)(void *))getRealOffset(oxo("0x56CAAF8"));
+
+    // ======================== [تم التحديث: _GetLeftAnkleTF] ========================
+    // القديم: 0x54C49D4
+    // الجديد: 0x56CAF48
+    this->_GetLeftAnkleTF = (void *(*)(void *))getRealOffset(oxo("0x56CAF48"));
+
+    // ======================== [تم التحديث: _GetRightAnkleTF] ========================
+    // القديم: 0x54C4AE0
+    // الجديد: 0x56CB054
+    this->_GetRightAnkleTF = (void *(*)(void *))getRealOffset(oxo("0x56CB054"));
+
+    // ======================== [تم التحديث: _GetLeftToeTF] ========================
+    // القديم: 0x54C4BEC
+    // الجديد: 0x56CB160
+    this->_GetLeftToeTF = (void *(*)(void *))getRealOffset(oxo("0x56CB160"));
+
+    // ======================== [تم التحديث: _GetRightToeTF] ========================
+    // القديم: 0x54C4CF8
+    // الجديد: 0x56CB280
+    this->_GetRightToeTF = (void *(*)(void *))getRealOffset(oxo("0x56CB280"));
+
+    // ======================== [تم التحديث: _getLeftHandTF] ========================
+    // القديم: 0x54320D8
+    // الجديد: 0x5635F18
+    this->_getLeftHandTF = (void *(*)(void *))getRealOffset(oxo("0x5635F18"));
+
+    // ======================== [تم التحديث: _getRightHandTF] ========================
+    // القديم: 0x54321DC
+    // الجديد: 0x563601C
+    this->_getRightHandTF = (void *(*)(void *))getRealOffset(oxo("0x563601C"));
+
+    // ======================== [تم التحديث: _getLeftForeArmTF] ========================
+    // القديم: 0x54322E0
+    // الجديد: 0x5636120
+    this->_getLeftForeArmTF = (void *(*)(void *))getRealOffset(oxo("0x5636120"));
+
+    // ======================== [تم التحديث: _getRightForeArmTF] ========================
+    // القديم: 0x54323E4
+    // الجديد: 0x5636224
+    this->_getRightForeArmTF = (void *(*)(void *))getRealOffset(oxo("0x5636224"));
+}
+
+namespace Camera$$WorldToScreen
+{
+ImVec2 Regular(Vector3 pos) {
+    auto cam = game_sdk->get_camera();
+    if (!cam) return {0,0};
+
+    Vector3 worldPoint = game_sdk->WorldToViewpoint(cam,pos, 2);
+    Vector3 location;
+
+    int ScreenWidth = ImGui::GetIO().DisplaySize.x;
+    int ScreenHeight = ImGui::GetIO().DisplaySize.y;
+
+    location.x = ScreenWidth * worldPoint.x;
+    location.y = ScreenHeight - worldPoint.y * ScreenHeight;
+    location.z  = worldPoint.z;
+
+    return {location.x, location.y};
+}
+
+ImVec2 Checker(Vector3 pos, bool &checker) {
+    auto cam = game_sdk->get_camera();
+    if (!cam) return {0, 0};
+   
+    Vector3 worldPoint = game_sdk->WorldToViewpoint(cam,pos, 4);
+    Vector3 location;
+ 
+    int ScreenWidth = ImGui::GetIO().DisplaySize.x;
+    int ScreenHeight = ImGui::GetIO().DisplaySize.y;
+ 
+    location.x = ScreenWidth * worldPoint.x;
+    location.y = ScreenHeight - worldPoint.y * ScreenHeight;
+    location.z = worldPoint.z;
+ 
+    checker = location.z > 1;
+ 
+    return {location.x, location.y};
+}
+}
+
+Vector3 GetBonePosition(void *player, void *(*transformGetter)(void *)) {
+    if (!player || !transformGetter)
+        return Vector3();
+    void *transform = transformGetter(player);
+    return transform ? game_sdk->get_position(game_sdk->Component_GetTransform(transform)) : Vector3();
+}
+
+Vector3 GetHitboxPosition(void* player, int hitbox) {
+    if (!player) return Vector3::zero();
+    
+    switch (hitbox) {
+        case 0: return GetBonePosition(player, game_sdk->GetHeadPositions);
+        case 1: {
+            Vector3 headPos = GetBonePosition(player, game_sdk->GetHeadPositions);
+            return headPos == Vector3::zero() ? headPos : Vector3(headPos.x, headPos.y - 0.1f, headPos.z);
+        }
+        case 2: {
+            Vector3 headPos = GetBonePosition(player, game_sdk->GetHeadPositions);
+            return headPos == Vector3::zero() ? headPos : Vector3(headPos.x, headPos.y - 0.2f, headPos.z);
+        }
+        default: return GetBonePosition(player, game_sdk->GetHeadPositions);
+    }
+}
+
+Vector3 getPosition(void *player) {
+    return game_sdk->get_position(game_sdk->Component_GetTransform(player));
+}
+
+Vector3 GetHeadPosition(void *player) {
+    return game_sdk->get_position(game_sdk->GetHeadPositions(player));
+}
+
+static Vector3 CameraMain(void *player) {
+    // ======================== [تم التحديث: CameraMain Offset] ========================
+    // القديم: 0x388
+    // الجديد: 0x3e8
+    return game_sdk->get_position(*(void **)((uint64_t)player + oxo("0x3e8")));//public Transform MainCameraTransform;
+}
+
+Quaternion GetRotationToTheLocation(Vector3 Target, float Height, Vector3 MyEnemy) {
+    Vector3 direction = (Target + Vector3(0, Height, 0)) - MyEnemy;
+    return Quaternion::LookRotation(direction, Vector3(0, 1, 0));
+}
+
+Quaternion GetCurrentRotation(void* player) {
+    void* transform = game_sdk->Component_GetTransform(player);
+    if (!transform) return Quaternion();
+    return Quaternion::LookRotation(game_sdk->GetForward(transform), Vector3(0, 1, 0));
+}
+
+#include "Helper/Ext.h"
+
+class tanghinh {
+public:
+    static Vector3 Transform_GetPosition(void *player) {
+       Vector3 out = Vector3::zero();
+        // ======================== [تم التحديث: Transform_GetPosition] ========================
+        // القديم: 0x929B794
+        // الجديد: 0x8d6c250
+        void (*_Transform_GetPosition)(void *transform, Vector3 *out) = (void (*)(void *, Vector3 *))getRealOffset(oxo("0x8d6c250"));//private void get_position_Injected(out Vector3 ret) { }
+        _Transform_GetPosition(player, &out);
+        return out;
+    }
+
+    static void *Player_GetHeadCollider(void *player)
+    {
+        // ======================== [تم التحديث: Player_GetHeadCollider] ========================
+        // القديم: 0x54310FC
+        // الجديد: 0x5634f3c
+        void *(*_Player_GetHeadCollider)(void *players) = (void *(*)(void *))getRealOffset(oxo("0x5634f3c"));//public virtual Collider get_HeadCollider() { }
+        return _Player_GetHeadCollider(player);
+    }
+
+    static bool Physics_Raycast(Vector3 camLocation, Vector3 headLocation, unsigned int LayerID, void *collider)
+    {
+        // ======================== [تم التحديث: Physics_Raycast] ========================
+        // القديم: 0x605C004
+        // الجديد: 0x6396de4
+        bool (*_Physics_Raycast)(Vector3 camLocation, Vector3 headLocation, unsigned int LayerID, void *collider) = (bool (*)(Vector3, Vector3, unsigned int, void *))getRealOffset(oxo("0x6396de4"));//public class HPFKOGPDBBE // TypeDefIndex: 33080 public static bool FOHHPOKDOND(Vector3 OENCHMFCMMO, Vector3 MHAIPDKIHNL, uint CBCKBCPFOAI, ref GMPGMPFNMFP NKEPDPFIOFJ) { }
+        return _Physics_Raycast(camLocation, headLocation, LayerID, collider);
+    }
+
+    static bool isVisible(void *enemy) {
+        if (enemy != NULL) {
+            void *hitObj = NULL;
+            auto Camera = Transform_GetPosition(game_sdk->Component_GetTransform(game_sdk->get_camera()));
+            auto Target = Transform_GetPosition(game_sdk->Component_GetTransform(Player_GetHeadCollider(enemy)));
+            return !Physics_Raycast(Camera, Target, 12, &hitObj);
+        }
+        return false;
+    }
+};
+
+
+void DrawSkeleton(void *player, ImDrawList *drawList)
+{
+    if (!player || !drawList)
+        return;
+    bool isPlayerVisible = tanghinh::isVisible(player);
+    Vector3 headPos = GetBonePosition(player, game_sdk->_GetHeadPositions);
+    Vector3 hipPos = GetBonePosition(player, game_sdk->_newHipMods);
+    Vector3 leftAnklePos = GetBonePosition(player, game_sdk->_GetLeftAnkleTF);
+    Vector3 rightAnklePos = GetBonePosition(player, game_sdk->_GetRightAnkleTF);
+    Vector3 leftToePos = GetBonePosition(player, game_sdk->_GetLeftToeTF);
+    Vector3 rightToePos = GetBonePosition(player, game_sdk->_GetRightToeTF);
+    Vector3 leftHandPos = GetBonePosition(player, game_sdk->_getLeftHandTF);
+    Vector3 rightHandPos = GetBonePosition(player, game_sdk->_getRightHandTF);
+    Vector3 leftForeArmPos = GetBonePosition(player, game_sdk->_getLeftForeArmTF);
+    Vector3 rightForeArmPos = GetBonePosition(player, game_sdk->_getRightForeArmTF);
+
+    // Chuyển đổi vị trí xương sang tọa độ màn hình
+    bool visible;
+    ImVec2 headScreen = Camera$$WorldToScreen::Checker(headPos, visible);
+    if (!visible)
+        return;
+
+    ImVec2 hipScreen = Camera$$WorldToScreen::Regular(hipPos);
+    ImVec2 leftAnkleScreen = Camera$$WorldToScreen::Regular(leftAnklePos);
+    ImVec2 rightAnkleScreen = Camera$$WorldToScreen::Regular(rightAnklePos);
+    ImVec2 leftToeScreen = Camera$$WorldToScreen::Regular(leftToePos);
+    ImVec2 rightToeScreen = Camera$$WorldToScreen::Regular(rightToePos);
+    ImVec2 leftHandScreen = Camera$$WorldToScreen::Regular(leftHandPos);
+    ImVec2 rightHandScreen = Camera$$WorldToScreen::Regular(rightHandPos);
+    ImVec2 leftForeArmScreen = Camera$$WorldToScreen::Regular(leftForeArmPos);
+    ImVec2 rightForeArmScreen = Camera$$WorldToScreen::Regular(rightForeArmPos);
+    ImColor boneColor = isPlayerVisible ? ImColor(0, 255, 0) : ImColor(255, 255, 255);
+    float thickness = 1.0f;
+
+    // Vẽ đầu
+    drawList->AddCircle(headScreen, 2.0f, boneColor, 12, thickness);
+    // Vẽ thân
+    drawList->AddLine(headScreen, hipScreen, boneColor, thickness);
+    // Vẽ tay
+    drawList->AddLine(headScreen, leftForeArmScreen, boneColor, thickness);
+    drawList->AddLine(headScreen, rightForeArmScreen, boneColor, thickness);
+    drawList->AddLine(leftForeArmScreen, leftHandScreen, boneColor, thickness);
+    drawList->AddLine(rightForeArmScreen, rightHandScreen, boneColor, thickness);
+    // Vẽ chân
+    drawList->AddLine(hipScreen, leftAnkleScreen, boneColor, thickness);
+    drawList->AddLine(hipScreen, rightAnkleScreen, boneColor, thickness);
+    drawList->AddLine(leftAnkleScreen, leftToeScreen, boneColor, thickness);
+    drawList->AddLine(rightAnkleScreen, rightToeScreen, boneColor, thickness);
+}
+
+bool isFov(Vector3 vec1, Vector3 vec2, int radius)
+{
+    int x = vec1.x;
+    int y = vec1.y;
+    int x0 = vec2.x;
+    int y0 = vec2.y;
+    if ((pow(x - x0, 2) + pow(y - y0, 2)) <= pow(radius, 2))
+    {
+        return true;
+    }
+    return false;
+}
+
+void *GetClosestEnemy()
+{
+    try
+    {
+        float shortestDistance = 9999.0f;
+        void *closestEnemy = NULL;
+        void *get_MatchGame = game_sdk->Curent_Match();
+        if (!get_MatchGame)
+            return NULL;
+        void *LocalPlayer = game_sdk->GetLocalPlayer(get_MatchGame);
+        if (!LocalPlayer || !game_sdk->Component_GetTransform(LocalPlayer))
+            return NULL;
+        if (!Vars.Enable)
+            return NULL;
+        Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((long)get_MatchGame + oxo("0x148"));
+        if (!players )
+            return NULL;
+        for (int u = 0; u < players->getSize(); u++)
+        {
+            void *Player = players->getValues()[u];
+            if (!Player)
+                continue;
+            if (Player == LocalPlayer)
+                continue;
+            if (!game_sdk->get_MaxHP(Player))
+                continue;
+            if (game_sdk->get_IsDieing(Player))
+                continue;
+            if (!game_sdk->get_isVisible(Player))
+                continue;
+            if (game_sdk->get_isLocalTeam(Player))
+                continue;
+            Vector3 PlayerPos = getPosition(Player);
+            Vector3 LocalPlayerPos = getPosition(LocalPlayer);
+            ImVec2 screenPos = Camera$$WorldToScreen::Regular(PlayerPos);
+            bool isFov1 = isFov(Vector3(screenPos.x, screenPos.y), Vector3(ImGui::GetIO().DisplaySize.x / 2, ImGui::GetIO().DisplaySize.y / 2), Vars.AimFov);
+            float distance = Vector3::Distance(LocalPlayerPos, PlayerPos);
+            if (distance < 200)
+            {
+                Vector3 targetDir = Vector3::Normalized(PlayerPos - LocalPlayerPos);
+                float angle = Vector3::Angle(targetDir, game_sdk->GetForward(game_sdk->Component_GetTransform(game_sdk->get_camera()))) * 100.0f;
+                if (angle <= Vars.AimFov && isFov1 && angle < shortestDistance)
+                {
+                    if (tanghinh::isVisible(Player))
+                    {
+                        shortestDistance = angle;
+                        closestEnemy = Player;
+                    }
+                }
+            }
+        }
+        return closestEnemy;
+    }
+    catch (...)
+    {
+        return NULL;
+    }
+}
+void ProcessAimbot()
+{
+    if (!Vars.Aimbot)
+        return;
+    void *CurrentMatch = game_sdk->Curent_Match();
+    if (!CurrentMatch)
+        return;
+    void *LocalPlayer = game_sdk->GetLocalPlayer(CurrentMatch);
+    if (!LocalPlayer || !game_sdk->Component_GetTransform(LocalPlayer))
+        return;
+    if (game_sdk->get_IsDieing(LocalPlayer))
+        return;
+    void *closestEnemy = GetClosestEnemy();
+    if (!closestEnemy || !game_sdk->Component_GetTransform(closestEnemy))
+        return;
+    if (game_sdk->get_IsDieing(closestEnemy))
+        return;
+    if (!game_sdk->get_isVisible(closestEnemy))
+        return;
+    Vector3 EnemyLocation = GetHeadPosition(closestEnemy);
+    if (EnemyLocation == Vector3::zero())
+        return;
+    Vector3 PlayerLocation = CameraMain(LocalPlayer);
+  if (PlayerLocation == Vector3::zero())
+        return;
+    Quaternion PlayerLook = GetRotationToTheLocation(EnemyLocation, 0.1f, PlayerLocation);
+
+    bool IsScopeOn = game_sdk->get_IsSighting(LocalPlayer);
+    bool IsFiring = game_sdk->get_IsFiring(LocalPlayer);
+
+    bool shouldAim =
+        (Vars.AimWhen == 0) ||
+        (Vars.AimWhen == 1 && IsFiring) ||
+        (Vars.AimWhen == 2 && IsScopeOn);
+
+    if (shouldAim)
+    {
+        game_sdk->set_aim(LocalPlayer, PlayerLook);
+    }
+}
+void get_players()
+{
+    ImDrawList *draw_list = ImGui::GetBackgroundDrawList();
+    if (!draw_list)
+        return;
+    if (!Vars.Enable)
+        return;
+
+    try
+    {
+        ProcessAimbot();
+
+        void *current_Match = game_sdk->Curent_Match();
+        if (!current_Match)
+            return;
+
+        void *local_player = game_sdk->GetLocalPlayer(current_Match);
+        if (!local_player)
+            return;
+
+        Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((long)current_Match + 0x148);
+        if (!players )
+            return;
+
+        void *camera = game_sdk->get_camera();
+        if (!camera)
+            return;
+
+        for (int u = 0; u < players->getSize(); u++)
+        {
+            void *closestEnemy = players->getValues()[u];
+            if (!closestEnemy)
+                continue;
+            if (!game_sdk->Component_GetTransform(closestEnemy))
+                continue;
+            if (closestEnemy == local_player)
+                continue;
+            if (!game_sdk->get_MaxHP(closestEnemy))
+                continue;
+            if (game_sdk->get_IsDieing(closestEnemy))
+                continue;
+            if (!game_sdk->get_isVisible(closestEnemy))
+                continue;
+            if (game_sdk->get_isLocalTeam(closestEnemy))
+                continue;
+
+            Vector3 pos = getPosition(closestEnemy);
+            Vector3 pos2 = getPosition(local_player);
+            float distance = Vector3::Distance(pos, pos2);
+            if (distance > 200.0f)
+                continue;
+            ImColor line_color = ImColor(255, 255, 255);
+            bool w2sc;
+            ImVec2 top_pos = Camera$$WorldToScreen::Regular(pos + Vector3(0, 1.6, 0));
+            ImVec2 bot_pos = Camera$$WorldToScreen::Regular(pos);
+            ImVec2 pos_3 = Camera$$WorldToScreen::Checker(pos, w2sc);
+            auto pmtXtop = top_pos.x;
+            auto pmtXbottom = bot_pos.x;
+            if (top_pos.x > bot_pos.x)
+            {
+                pmtXtop = bot_pos.x;
+                pmtXbottom = top_pos.x;
+            }
+            Camera$$WorldToScreen::Checker(pos + Vector3(0, 0.75f, 0), w2sc);
+            float calculatedPosition = fabs((top_pos.y - bot_pos.y) * (0.0092f / 0.019f) / 2);
+
+            ImRect rect(
+                ImVec2(pmtXtop - calculatedPosition, top_pos.y),
+                ImVec2(pmtXbottom + calculatedPosition, bot_pos.y));
+            void *camTF = game_sdk->Component_GetTransform(game_sdk->get_camera());
+            Vector3 viewpos = camTF ? game_sdk->get_position(camTF) : Vector3::zero();
+            if (w2sc)
+            {
+                if (Vars.lines)
+                {
+                    if (game_sdk->get_IsDieing(closestEnemy))
+                    {
+                        draw_list->AddLine(ImVec2(ImGui::GetIO().DisplaySize.x / 2, 0), ImVec2(rect.GetCenter().x, rect.Min.y), ImColor(255, 0, 0));
+                    }
+                    else
+                    {
+                        draw_list->AddLine(ImVec2(ImGui::GetIO().DisplaySize.x / 2, 0), ImVec2(rect.GetCenter().x, rect.Min.y), line_color);
+                    }
+                }
+                if (Vars.Box)
+                {
+                    if (game_sdk->get_IsDieing(closestEnemy))
+                    {
+                        draw_list->AddRect(rect.Min, rect.Max, ImColor(255, 0, 0));
+                    }
+                    else
+                    {
+                        draw_list->AddRect(rect.Min, rect.Max, ImColor(255, 255, 255));
+                    }
+                    
+                    if (Vars.Outline)
+                    {
+                        draw_list->AddRect(rect.Min - ImVec2(1, 1), rect.Max + ImVec2(1, 1), ImColor(0, 0, 0), 0.65, 0, 1);
+                        draw_list->AddRect(rect.Min + ImVec2(1, 1), rect.Max - ImVec2(1, 1), ImColor(0, 0, 0), 0.65, 0, 1);
+                    }
+                }
+                if (Vars.Name)
+                {
+                    auto pname = game_sdk->name(closestEnemy);
+                    std::string names = "null";
+                    if (pname)
+                        names = pname->toCPPString();
+                    std::transform(names.begin(), names.end(), names.begin(), ::tolower);
+                    auto playername = names;
+                    std::string name = names;
+                    ImVec2 text_size = verdana_smol->CalcTextSizeA(8, FLT_MAX, 0, names.c_str());
+                    ImVec2 name_pos = {
+                        rect.Min.x + (rect.GetWidth() / 2) - text_size.x / 2,
+                        rect.Min.y - 2 - text_size.y};
+                    AddText(verdana_smol, 8, false, Vars.Outline, name_pos, ImColor(255, 255, 255), name);
+                }
+                if (Vars.Health)
+                {
+                    auto health = game_sdk->GetHp(closestEnemy);
+                    auto maxhealth = game_sdk->get_MaxHP(closestEnemy);
+                    float health_multiplier = (float)health / (float)maxhealth;
+                    float health_bar_pos = rect.Min.x - 4;
+                    draw_list->AddLine({health_bar_pos, rect.Min.y - 1}, {health_bar_pos, rect.Max.y}, ImColor(0, 0, 0, 100), 3);
+                    draw_list->AddLine({health_bar_pos - 0.5f, rect.Max.y}, {health_bar_pos - 0.5f, rect.Max.y - (rect.GetHeight() + 1) * health_multiplier}, ImColor(0, 255, 0), 3);
+                    if (Vars.Outline)
+                        draw_list->AddRect({health_bar_pos - 2, rect.Min.y - 1}, {health_bar_pos + 2, rect.Max.y + 1}, ImColor(0, 0, 0));
+                    std::string hpstr = fmt::format(oxorany("{}HP"), static_cast<int>(health));
+                    ImVec2 text_size_hp = pixel_smol->CalcTextSizeA(8, FLT_MAX, 0, hpstr.c_str());
+                    ImVec2 text_pos = {
+                        rect.Min.x + (rect.GetWidth() / 2) - text_size_hp.x / 2,
+                        rect.Max.y};
+                    AddText(pixel_smol, 8, false, true, text_pos, ImColor(0, 255, 0), hpstr.c_str());
+                }
+                if (Vars.Distance)
+                {
+                    std::string distancestr = fmt::format(oxorany("{}M"), static_cast<int>(distance));
+                    ImVec2 distance_pos = {
+                        rect.Max.x + 4,
+                        rect.Min.y};
+                    AddText(pixel_smol, 8, false, true, distance_pos, ImColor(255, 255, 255), distancestr.c_str());
+                }
+                if (Vars.circlepos)
+                {
+                    Draw3DCircle(pos, 1.0f, 0.5f, ImColor(255, 0, 0), 36, false, 0.5f);
+                }
+                if (Vars.skeleton)
+                {
+                    DrawSkeleton(closestEnemy, draw_list);
+                }
+            }
+            if (Vars.OOF)
+            {
+                if ((pos_3.x < 0 || pos_3.x > disp.width) || (pos_3.y < 0 || pos_3.y > disp.height) || !w2sc)
+                {
+                    constexpr int maxpixels = 150;
+                    int pixels = maxpixels;
+                    if (w2sc)
+                    {
+                        if (pos_3.x < 0)
+                            pixels = clamp((int)-pos_3.x, 0, (int)maxpixels);
+                        if (pos_3.y < 0)
+                            pixels = clamp((int)-pos_3.y, 0, (int)maxpixels);
+
+                        if (pos_3.x > disp.width)
+                            pixels = clamp((int)pos_3.x - (int)disp.width, 0, (int)maxpixels);
+                        if (pos_3.y > disp.height)
+                            pixels = clamp((int)pos_3.y - (int)disp.height, 0, (int)maxpixels);
+                    }
+
+                    float opacity = (float)pixels / (float)maxpixels;
+
+                    float size = 3.5f;
+                    Vector3 viewdir = game_sdk->GetForward(game_sdk->Component_GetTransform(game_sdk->get_camera()));
+                    Vector3 targetdir = Vector3::Normalized(pos - viewpos);
+
+                    float viewangle = atan2(viewdir.z, viewdir.x) * Rad2Deg;
+                    float targetangle = atan2(targetdir.z, targetdir.x) * Rad2Deg;
+
+                    if (viewangle < 0)
+                        viewangle += 360;
+                    if (targetangle < 0)
+                        targetangle += 360;
+
+                    float angle = targetangle - viewangle;
+
+                    while (angle < 0)
+                        angle += 360;
+                    while (angle > 360)
+                        angle -= 360;
+
+                    angle = 360 - angle;
+                    angle -= 90;
+                    OtFovV1(ImGui::GetIO().DisplaySize.x / 2, ImGui::GetIO().DisplaySize.y / 2, 90 + distance * 2,
+                            angle - size,
+                            angle + size,
+                            ImColor(1.f, 1.f, 1.f, 1.f * opacity), 1);
+                }
+            }
+        }
+    }
+    catch (...)
+    {
+        return;
+    }
+}
+void aimbot()
+{
+    ImVec2 center = ImVec2(ImGui::GetIO().DisplaySize.x / 2, ImGui::GetIO().DisplaySize.y / 2);
+    if (!Vars.Aimbot)
+        return;
+    ImDrawList *draw_list = ImGui::GetBackgroundDrawList();
+    if (!draw_list)
+        return;
+    void *Match = game_sdk->Curent_Match();
+    if (!Match)
+        return;
+    if (Vars.isAimFov)
+    {
+        if (Vars.fovaimglow)
+            drawcircleglow(draw_list, center, Vars.AimFov, ImColor(Vars.fovLineColor[0], Vars.fovLineColor[1], Vars.fovLineColor[2], Vars.fovLineColor[3]), 999, 1, 12);
+        else
+            draw_list->AddCircle(center, Vars.AimFov, ImColor(Vars.fovLineColor[0], Vars.fovLineColor[1], Vars.fovLineColor[2], Vars.fovLineColor[3]), 100);
+    }
+    void *LocalPlayer = game_sdk->GetLocalPlayer(Match);
+    if (!LocalPlayer)
+        return;
+    void *playertarget = GetClosestEnemy();
+    if (!playertarget)
+        return;
+    ImVec2 EnemyLocation = Camera$$WorldToScreen::Regular(GetHeadPosition(playertarget));
+    drawlineglow(draw_list, ImVec2(center.x, center.y), EnemyLocation, ImColor(255, 255, 255), 1, 3);
+}
+void draw_watermark()
+{
+    std::string claw = oxorany("");
+    ImVec2 text_size = verdana_smol->calc_size(16, claw);
+    ImVec2 text_pos(
+        10, // Left margin
+        ImGui::GetIO().DisplaySize.y - text_size.y - 10); // Bottom margin
+    AddText(verdana_smol, 16, false, false, text_pos + ImVec2(1, 1), ImColor(0, 0, 0, 150), claw);
+    static float hue = 0.0f;
+    hue += ImGui::GetIO().DeltaTime * 0.1f;
+    if (hue > 1.0f)
+        hue = 0.0f;
+    ImColor rainbow = ImColor::HSV(hue, 0.8f, 0.8f);
+    AddText(verdana_smol, 16, false, false, text_pos, rainbow, claw);
+    ImDrawList *draw_list = ImGui::GetBackgroundDrawList();
+    draw_list->AddLine(
+        ImVec2(text_pos.x, text_pos.y + text_size.y + 2),
+        ImVec2(text_pos.x + text_size.x, text_pos.y + text_size.y + 2),
+        rainbow,
+        2.0f);
+}
+
+// ============================================================
+//  Ported from X96 2Ripper (PUBG): Telekill / Fly V2 / Ninja Run
+// ============================================================
+// --- FF Transform::set_position offset ---------------------------------------
+// Taken from the dump.cs of THIS build (validated: its get_position RVA
+// 0x8D6C1EC is exactly the working offset already used in game_sdk->init()).
+// 0x8D6C2B4 = UnityEngine.Transform::set_position(Vector3 value) — called
+// BY VALUE (HFA), the same proven pattern as get_position.
+// Fail-closed: an offset failing the image check below keeps the features off.
+#include <dlfcn.h> // dladdr — validates the set_position offset before use
+
+static const char *FF_SET_POSITION_OFFSET = "0x8D6C2B4";
+
+// Plain 3-float struct: always an HFA -> passed in v0/v1/v2, exactly like
+// Unity's Vector3 (removes any ABI doubt about ff's union-based Vector3).
+struct FFVec3 { float x, y, z; };
+
+static void Transform_SetPosition(void *tf, Vector3 pos)
+{
+    if (!tf)
+        return;
+
+    static void *fn = nullptr;
+    static bool tried = false;
+    if (!tried)
+    {
+        tried = true;
+        if (FF_SET_POSITION_OFFSET && strcmp(FF_SET_POSITION_OFFSET, "0x0") != 0)
+        {
+            uintptr_t off = strtoull(FF_SET_POSITION_OFFSET, NULL, 0);
+            if (off)
+            {
+                void *cand = (void *)getRealOffset(off);
+                // Only trust an address living in the SAME image as the
+                // known-good get_position offset — this catches offsets
+                // copy-pasted from another dump / another binary.
+                Dl_info goodInfo{};
+                Dl_info candInfo{};
+                if (cand &&
+                    dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+                    dladdr(cand, &candInfo) &&
+                    goodInfo.dli_fbase && candInfo.dli_fbase &&
+                    goodInfo.dli_fbase == candInfo.dli_fbase)
+                {
+                    fn = cand;
+                }
+            }
+        }
+    }
+    if (!fn)
+        return; // fail-closed: no (valid) offset -> no call -> no crash
+
+    ((void (*)(void *, FFVec3))fn)(tf, FFVec3{pos.x, pos.y, pos.z});
+}
+
+// Fly V2 state (the height captured when you switch it on)
+void *FlyalturaEXpose = nullptr;
+float FlyalturaEXposeX = 0.0f;
+float FlyalturaEXposeY = 0.0f;
+float FlyalturaEXposeZ = 0.0f;
+
+// ---- Ninja Run (RUNN): run forward like the camera, same height ----
+void RunFly()
+{
+    if (!Vars.fly)
+        return;
+
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return;
+
+    void *local_player = game_sdk->GetLocalPlayer(match);
+    if (!local_player)
+        return;
+    if (game_sdk->get_MaxHP(local_player) <= 0)
+        return; // lobby / stale match: not a live player
+
+    // Null-guard everything: transform / camera are null while dead or in the lobby
+    void *localTF = game_sdk->Component_GetTransform(local_player);
+    if (!localTF)
+        return;
+
+    void *camera = game_sdk->get_camera();
+    if (!camera)
+        return;
+
+    void *cameraTF = game_sdk->Component_GetTransform(camera);
+    if (!cameraTF)
+        return;
+
+    float speed = clamp(Vars.flySpeed, 0.0f, 6.0f);
+
+    Vector3 mountPlayer = game_sdk->get_position(localTF);
+
+    Vector3 forwardMove = game_sdk->GetForward(cameraTF) * speed;
+    Vector3 newPosition = mountPlayer + forwardMove;
+
+    newPosition.y = mountPlayer.y;
+
+    Transform_SetPosition(localTF, newPosition);
+}
+
+// ---- Fly V2: stay at the height you enabled it on (+ Fly Height) ----
+void RunFlyV2()
+{
+    if (!Vars.Flyingtest)
+    {
+        FlyalturaEXposeX = 0.0f;
+        FlyalturaEXposeY = 0.0f;
+        FlyalturaEXposeZ = 0.0f;
+        FlyalturaEXpose = nullptr;
+        return;
+    }
+
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return;
+
+    void *localPlayer = game_sdk->GetLocalPlayer(match);
+    if (!localPlayer)
+        return;
+    if (game_sdk->get_MaxHP(localPlayer) <= 0)
+        return; // lobby / stale match: not a live player
+
+    void *tf = game_sdk->Component_GetTransform(localPlayer);
+    if (!tf)
+        return;
+
+    Vector3 pos = game_sdk->get_position(tf);
+
+    if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeY == 0.0f && FlyalturaEXposeZ == 0.0f) ||
+        FlyalturaEXpose == nullptr)
+    {
+        if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeZ == 0.0f) ||
+            FlyalturaEXpose == nullptr)
+        {
+            FlyalturaEXposeX = pos.x;
+            FlyalturaEXposeZ = pos.z;
+            FlyalturaEXpose = localPlayer;
+        }
+        FlyalturaEXposeY = pos.y;
+    }
+
+    Transform_SetPosition(tf, Vector3(pos.x, FlyalturaEXposeY + Vars.flyhei, pos.z));
+}
+
+// ---- closest alive enemy (used by Telekill) ----
+void *GetClosestEnemyForTelekill()
+{
+    float shortestDistance = 3000.0f;
+    void *closestEnemy = NULL;
+
+    void *get_MatchGame = game_sdk->Curent_Match();
+    if (!get_MatchGame)
+        return NULL;
+
+    void *LocalPlayer = game_sdk->GetLocalPlayer(get_MatchGame);
+    if (!LocalPlayer || !game_sdk->Component_GetTransform(LocalPlayer))
+        return NULL;
+
+    Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((long)get_MatchGame + oxo("0x148"));
+    if (!players)
+        return NULL;
+
+    Vector3 LocalPlayerPos = game_sdk->get_position(game_sdk->Component_GetTransform(LocalPlayer));
+
+    for (int u = 0; u < players->getSize(); u++)
+    {
+        void *Player = players->getValues()[u];
+        if (!Player)
+            continue;
+        if (Player == LocalPlayer)
+            continue;
+        if (!game_sdk->get_MaxHP(Player))
+            continue;
+        if (game_sdk->get_isLocalTeam(Player))
+            continue;
+        if (game_sdk->get_IsDieing(Player))
+            continue;
+
+        void *playerTF = game_sdk->Component_GetTransform(Player);
+        if (!playerTF)
+            continue;
+
+        Vector3 PlayerPos = game_sdk->get_position(playerTF);
+        float distance = Vector3::Distance(LocalPlayerPos, PlayerPos);
+        if (distance >= 3000)
+            continue;
+
+        if (distance < shortestDistance)
+        {
+            shortestDistance = distance;
+            closestEnemy = Player;
+        }
+    }
+    return closestEnemy;
+}
+
+// ---- Telekill: teleport yourself next to the closest enemy ----
+void RunTelekill()
+{
+    if (!Vars.Telekill)
+        return;
+
+    void *closestEnemyForTelekill = GetClosestEnemyForTelekill();
+    if (!closestEnemyForTelekill)
+        return;
+
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return;
+
+    void *local_player = game_sdk->GetLocalPlayer(match);
+    if (!local_player)
+        return;
+    if (game_sdk->get_MaxHP(local_player) <= 0)
+        return; // lobby / stale match: not a live player
+
+    void *_MountTF = game_sdk->Component_GetTransform(closestEnemyForTelekill);
+    void *_LocalTF = game_sdk->Component_GetTransform(local_player);
+    if (!_MountTF || !_LocalTF)
+        return;
+
+    Vector3 MountTF = game_sdk->get_position(_MountTF);
+    Vector3 forward = game_sdk->GetForward(_MountTF);
+    Vector3 targetPos = MountTF;
+
+    if (Vars.khoangcach < 10)
+    {
+        float dist = (10 - Vars.khoangcach) * 0.5f;
+        targetPos.x += forward.x * dist;
+        targetPos.z += forward.z * dist;
+    }
+    else if (Vars.khoangcach > 10)
+    {
+        float dist = (Vars.khoangcach - 10) * 0.5f;
+        targetPos.x -= forward.x * dist;
+        targetPos.z -= forward.z * dist;
+    }
+
+    Transform_SetPosition(_LocalTF, targetPos);
+}
