@@ -81,6 +81,7 @@ struct FltBtnState {
     bool moved = false;
     bool pressed = false;
     bool toggled = false;   // instant tap applied, awaiting possible drag-cancel
+    float knobX = -1.0f;    // animated knob screen-x, -1 = not placed yet
 };
 static FltBtnState gFltBtn[FLTBTN_COUNT];
 static ImRect gFltBtnRect[FLTBTN_COUNT];   // screen rect while visible (hit-test)
@@ -100,8 +101,9 @@ static bool FFPointOverFloating(CGPoint p)
 
 static void DrawFloatingButton(int idx, const char *label, bool *v)
 {
-    // Always visible — never auto-hidden; the option state is shown by the
-    // styling (bright = ON, dimmed = OFF) instead of by showing/hiding.
+    // Always visible — never auto-hidden. The frame/label NEVER change
+    // color (the screenshot look stays fixed); the only state indicator
+    // is the white knob sliding left (OFF) / right (ON).
     FltBtnState &b = gFltBtn[idx];
     const float W = 80.0f, H = 74.0f;   // smaller: was 104x96 ("too big")
     if (!b.inited) {
@@ -110,17 +112,14 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
         b.pos = ImVec2(ds.x - W - 12.0f, 64.0f + idx * (H + 12.0f));   // higher up
     }
 
-    const bool onPre = *v;   // window chrome (may lag the tap by one frame)
-
+    // fixed look — the frame NEVER changes color (state = knob position only)
     ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(W, H), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, onPre ? ImVec4(0.05f, 0.07f, 0.10f, 0.62f)
-                                                   : ImVec4(0.05f, 0.06f, 0.08f, 0.42f));
-    ImGui::PushStyleColor(ImGuiCol_Border, onPre ? ImVec4(0.31f, 0.90f, 1.00f, 1.00f)
-                                                 : ImVec4(0.31f, 0.90f, 1.00f, 0.38f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.07f, 0.10f, 0.62f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.31f, 0.90f, 1.00f, 1.00f));
 
     char wname[48];
     snprintf(wname, sizeof(wname), "##fltwin%d", idx);
@@ -162,19 +161,26 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
         b.pressed = false; b.moved = false; b.toggled = false;
     }
 
-    const bool on = *v;   // fresh state — reflects the tap immediately
+    const bool on = *v;   // knob target: right = ON, left = OFF
 
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
 
-    // label: red while ON, grey while OFF (like "Ghost" in the screenshot)
+    // label always red — the frame keeps the screenshot look at all times
     ImVec2 ts = ImGui::CalcTextSize(label);
     dl->AddText(ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 10.0f),
-                on ? IM_COL32(255, 64, 64, 255) : IM_COL32(150, 150, 150, 255), label);
+                IM_COL32(255, 64, 64, 255), label);
 
-    // knob: white while ON, dim grey while OFF
-    dl->AddCircleFilled(ImVec2(wp.x + W * 0.5f, wp.y + H * 0.63f), 15.0f,
-                        on ? IM_COL32(245, 245, 245, 255) : IM_COL32(120, 120, 120, 190), 36);
+    // white knob SLIDES left (OFF) / right (ON), smoothly animated —
+    // only the knob moves, nothing else changes
+    const float margin = 8.0f, r = 15.0f;
+    float targetX = on ? (wp.x + W - margin - r) : (wp.x + margin + r);
+    if (b.knobX <= 0.0f) b.knobX = targetX;              // first frame: snap
+    float k = ImGui::GetIO().DeltaTime * 14.0f;          // smooth slide
+    if (k > 1.0f) k = 1.0f;
+    b.knobX += (targetX - b.knobX) * k;
+    dl->AddCircleFilled(ImVec2(b.knobX, wp.y + H * 0.63f), r,
+                        IM_COL32(245, 245, 245, 255), 36);
 
     gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));   // always tappable
 
