@@ -75,11 +75,12 @@ enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_COUNT = 3 
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
+    ImVec2 baseline = ImVec2(0, 0);   // touch-down point (kills stale-delta jumps)
+    ImVec2 grabPos = ImVec2(0, 0);    // window pos at touch-down
     bool inited = false;
     bool moved = false;
     bool pressed = false;
     bool toggled = false;   // instant tap applied, awaiting possible drag-cancel
-    float travel = 0.0f;
 };
 static FltBtnState gFltBtn[FLTBTN_COUNT];
 static ImRect gFltBtnRect[FLTBTN_COUNT];   // screen rect while visible (hit-test)
@@ -102,11 +103,11 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     // Always visible — never auto-hidden; the option state is shown by the
     // styling (bright = ON, dimmed = OFF) instead of by showing/hiding.
     FltBtnState &b = gFltBtn[idx];
-    const float W = 104.0f, H = 96.0f;
+    const float W = 80.0f, H = 74.0f;   // smaller: was 104x96 ("too big")
     if (!b.inited) {
         b.inited = true;
         ImVec2 ds = ImGui::GetIO().DisplaySize;
-        b.pos = ImVec2(ds.x - W - 14.0f, 130.0f + idx * (H + 14.0f));
+        b.pos = ImVec2(ds.x - W - 12.0f, 64.0f + idx * (H + 12.0f));   // higher up
     }
 
     const bool onPre = *v;   // window chrome (may lag the tap by one frame)
@@ -136,17 +137,29 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     ImGuiIO &io = ImGui::GetIO();
     if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if (!b.pressed) {
-            // instant response: toggle the moment the finger lands
-            b.pressed = true; b.moved = false; b.travel = 0.0f; b.toggled = true;
+            // instant toggle on touch-down. The first frame only RECORDS the
+            // press point: MouseDelta can hold a jump from the stale position
+            // of the previous touch (the "buttons run away" bug), so movement
+            // is measured from the touch-down point, never from old deltas.
+            b.pressed = true; b.moved = false; b.toggled = true;
+            b.baseline = io.MousePos;
+            b.grabPos = b.pos;
             *v = !*v;
+        } else if (!b.moved) {
+            float dx = io.MousePos.x - b.baseline.x;
+            float dy = io.MousePos.y - b.baseline.y;
+            if (fabsf(dx) + fabsf(dy) > 12.0f) b.moved = true;         // drag threshold
+            if (b.moved && b.toggled) { *v = !*v; b.toggled = false; }  // drag cancels tap
         }
-        b.travel += fabsf(io.MouseDelta.x) + fabsf(io.MouseDelta.y);
-        if (b.travel > 12.0f) b.moved = true;
-        if (b.moved && b.toggled) { *v = !*v; b.toggled = false; }  // drag = cancel tap
-        if (b.moved) b.pos += io.MouseDelta;
+        if (b.moved) {
+            // absolute positioning: window follows the finger from the press
+            // point, no incremental drift, works from any spot on the button
+            b.pos = ImVec2(b.grabPos.x + (io.MousePos.x - b.baseline.x),
+                           b.grabPos.y + (io.MousePos.y - b.baseline.y));
+        }
     }
     if (b.pressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-        b.pressed = false; b.moved = false; b.travel = 0.0f; b.toggled = false;
+        b.pressed = false; b.moved = false; b.toggled = false;
     }
 
     const bool on = *v;   // fresh state — reflects the tap immediately
@@ -393,6 +406,11 @@ ImFont* Urbanist;
     CGFloat y = (menuSize.height - 260) / 2;
     disp.width = io.DisplaySize.x;   // was never set -> Arrow ESP bounds were wrong
     disp.height = io.DisplaySize.y;
+            // floating buttons BEFORE the menu so the menu (drawn later) stays
+            // on top — panel checkboxes keep winning the clicks on overlap
+            DrawFloatingButton(FLTBTN_TELEKILL, oxorany("Telekill"), &Vars.Telekill);
+            DrawFloatingButton(FLTBTN_FLYV2, oxorany("Fly V2"), &Vars.Flyingtest);
+            DrawFloatingButton(FLTBTN_RUNN, oxorany("Ninja Run"), &Vars.fly);
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(365, 270), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
@@ -459,10 +477,6 @@ ImFont* Urbanist;
                 }
         ImGui::End();
     }
-            // floating quick-toggle buttons (visible while the feature is on)
-            DrawFloatingButton(FLTBTN_TELEKILL, oxorany("Telekill"), &Vars.Telekill);
-            DrawFloatingButton(FLTBTN_FLYV2, oxorany("Fly V2"), &Vars.Flyingtest);
-            DrawFloatingButton(FLTBTN_RUNN, oxorany("Ninja Run"), &Vars.fly);
             ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
             get_players();
             draw_watermark();
