@@ -66,6 +66,111 @@ static UIWindow *SafeHostWindow(void)
     return [UIApplication sharedApplication].windows.firstObject;
 }
 
+// ===================== floating feature buttons =====================
+// Quick-toggle buttons over the game, styled like the cyan toggle from the
+// screenshot: red label on top, white knob, cyan rounded border. A button
+// shows only while its feature is ON; a plain tap switches it off, dragging
+// moves the button around.
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_COUNT = 3 };
+
+struct FltBtnState {
+    ImVec2 pos = ImVec2(0, 0);
+    bool inited = false;
+    bool moved = false;
+    bool pressed = false;
+    float travel = 0.0f;
+};
+static FltBtnState gFltBtn[FLTBTN_COUNT];
+static ImRect gFltBtnRect[FLTBTN_COUNT];   // screen rect while visible (hit-test)
+
+static bool MenDeal = true;   // menu visibility (moved up: FFOverlayView needs it)
+
+// Touch hit-testing: while the menu is closed the overlay must give the game
+// every touch EXCEPT taps that land on a floating feature button.
+static bool FFPointOverFloating(CGPoint p)
+{
+    ImVec2 pt((float)p.x, (float)p.y);
+    for (int i = 0; i < FLTBTN_COUNT; i++)
+        if (gFltBtnRect[i].Contains(pt))
+            return true;
+    return false;
+}
+
+static void DrawFloatingButton(int idx, const char *label, bool *v)
+{
+    if (!*v) { gFltBtnRect[idx] = ImRect(); return; }
+
+    FltBtnState &b = gFltBtn[idx];
+    const float W = 104.0f, H = 96.0f;
+    if (!b.inited) {
+        b.inited = true;
+        ImVec2 ds = ImGui::GetIO().DisplaySize;
+        b.pos = ImVec2(ds.x - W - 14.0f, 130.0f + idx * (H + 14.0f));
+    }
+
+    ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(W, H), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.07f, 0.10f, 0.62f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.31f, 0.90f, 1.00f, 1.00f));
+
+    char wname[48];
+    snprintf(wname, sizeof(wname), "##fltwin%d", idx);
+    ImGui::Begin(wname, nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos();
+
+    // red label, top center (like "Ghost" in the screenshot)
+    ImVec2 ts = ImGui::CalcTextSize(label);
+    dl->AddText(ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 10.0f),
+                IM_COL32(255, 64, 64, 255), label);
+
+    // white knob
+    dl->AddCircleFilled(ImVec2(wp.x + W * 0.5f, wp.y + H * 0.63f), 15.0f,
+                        IM_COL32(245, 245, 245, 255), 36);
+
+    ImGui::SetCursorPos(ImVec2(0, 0));
+    char bname[48];
+    snprintf(bname, sizeof(bname), "##fltbtn%d", idx);
+    ImGui::InvisibleButton(bname, ImVec2(W, H));
+
+    ImGuiIO &io = ImGui::GetIO();
+    if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (!b.pressed) { b.pressed = true; b.moved = false; b.travel = 0.0f; }
+        b.travel += fabsf(io.MouseDelta.x) + fabsf(io.MouseDelta.y);
+        if (b.travel > 6.0f) b.moved = true;
+        if (b.moved) b.pos += io.MouseDelta;
+    }
+    if (b.pressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        if (!b.moved) *v = false;    // plain tap = switch the feature off
+        b.pressed = false; b.moved = false; b.travel = 0.0f;
+    }
+
+    gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));
+
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(3);
+}
+
+// Overlay view that eats only the touches landing on a floating button while
+// the menu is hidden; everything else passes straight through to the game.
+@interface FFOverlayView : MTKView
+@end
+@implementation FFOverlayView
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event
+{
+    if (MenDeal)
+        return [super hitTest:point withEvent:event];
+    return FFPointOverFloating(point) ? self : nil;
+}
+@end
+
 @interface ImGuiDrawView () <MTKViewDelegate>
 @property (nonatomic, strong) id <MTLDevice> device;
 @property (nonatomic, strong) id <MTLCommandQueue> commandQueue;
@@ -77,7 +182,6 @@ ImFont* verdanab;
 ImFont* icons;
 ImFont* interb;
 ImFont* Urbanist;
-static bool MenDeal = true;
 
 
 - (instancetype)initWithNibName:(nullable NSString *)nibNameOrNil bundle:(nullable NSBundle *)nibBundleOrNil
@@ -167,7 +271,7 @@ static bool MenDeal = true;
     CGSize sz = (host && host.rootViewController.view) ? host.rootViewController.view.frame.size : UIScreen.mainScreen.bounds.size;
     if (sz.width < 1 || sz.height < 1)
         sz = UIScreen.mainScreen.bounds.size;
-    self.view = [[MTKView alloc] initWithFrame:CGRectMake(0, 0, sz.width, sz.height)];
+    self.view = [[FFOverlayView alloc] initWithFrame:CGRectMake(0, 0, sz.width, sz.height)];
 }
 
 - (void)viewDidLoad {
@@ -246,7 +350,10 @@ static bool MenDeal = true;
         else if (MenDeal == false) 
         {
            
-            [self.view setUserInteractionEnabled:NO];
+            // FFOverlayView.hitTest decides per touch whether the game (nil)
+            // or the overlay (self) receives it, so the floating feature
+            // buttons stay tappable while the menu is closed.
+            [self.view setUserInteractionEnabled:YES];
            
 
         }
@@ -329,6 +436,10 @@ static bool MenDeal = true;
                 }
         ImGui::End();
     }
+            // floating quick-toggle buttons (visible while the feature is on)
+            DrawFloatingButton(FLTBTN_TELEKILL, oxorany("Telekill"), &Vars.Telekill);
+            DrawFloatingButton(FLTBTN_FLYV2, oxorany("Fly V2"), &Vars.Flyingtest);
+            DrawFloatingButton(FLTBTN_RUNN, oxorany("Ninja Run"), &Vars.fly);
             ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
             get_players();
             draw_watermark();
