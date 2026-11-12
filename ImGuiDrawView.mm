@@ -68,9 +68,9 @@ static UIWindow *SafeHostWindow(void)
 
 // ===================== floating feature buttons =====================
 // Quick-toggle buttons over the game, styled like the cyan toggle from the
-// screenshot: red label on top, white knob, cyan rounded border. A button
-// shows only while its feature is ON; a plain tap switches it off, dragging
-// moves the button around.
+// screenshot: red label on top, white knob, cyan rounded border. Buttons are
+// ALWAYS visible (they never auto-hide); a plain tap toggles the option on
+// and off, dragging moves the button around. Bright = ON, dimmed = OFF.
 enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_COUNT = 3 };
 
 struct FltBtnState {
@@ -98,8 +98,8 @@ static bool FFPointOverFloating(CGPoint p)
 
 static void DrawFloatingButton(int idx, const char *label, bool *v)
 {
-    if (!*v) { gFltBtnRect[idx] = ImRect(); return; }
-
+    // Always visible — never auto-hidden; the option state is shown by the
+    // styling (bright = ON, dimmed = OFF) instead of by showing/hiding.
     FltBtnState &b = gFltBtn[idx];
     const float W = 104.0f, H = 96.0f;
     if (!b.inited) {
@@ -108,13 +108,17 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
         b.pos = ImVec2(ds.x - W - 14.0f, 130.0f + idx * (H + 14.0f));
     }
 
+    const bool on = *v;   // live option state (updates next frame after a tap)
+
     ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(W, H), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.07f, 0.10f, 0.62f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.31f, 0.90f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, on ? ImVec4(0.05f, 0.07f, 0.10f, 0.62f)
+                                                : ImVec4(0.05f, 0.06f, 0.08f, 0.42f));
+    ImGui::PushStyleColor(ImGuiCol_Border, on ? ImVec4(0.31f, 0.90f, 1.00f, 1.00f)
+                                              : ImVec4(0.31f, 0.90f, 1.00f, 0.38f));
 
     char wname[48];
     snprintf(wname, sizeof(wname), "##fltwin%d", idx);
@@ -125,14 +129,14 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
 
-    // red label, top center (like "Ghost" in the screenshot)
+    // label: red while ON, grey while OFF (like "Ghost" in the screenshot)
     ImVec2 ts = ImGui::CalcTextSize(label);
     dl->AddText(ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 10.0f),
-                IM_COL32(255, 64, 64, 255), label);
+                on ? IM_COL32(255, 64, 64, 255) : IM_COL32(150, 150, 150, 255), label);
 
-    // white knob
+    // knob: white while ON, dim grey while OFF
     dl->AddCircleFilled(ImVec2(wp.x + W * 0.5f, wp.y + H * 0.63f), 15.0f,
-                        IM_COL32(245, 245, 245, 255), 36);
+                        on ? IM_COL32(245, 245, 245, 255) : IM_COL32(120, 120, 120, 190), 36);
 
     ImGui::SetCursorPos(ImVec2(0, 0));
     char bname[48];
@@ -147,11 +151,11 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
         if (b.moved) b.pos += io.MouseDelta;
     }
     if (b.pressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-        if (!b.moved) *v = false;    // plain tap = switch the feature off
+        if (!b.moved) *v = !*v;    // plain tap = toggle the option on/off
         b.pressed = false; b.moved = false; b.travel = 0.0f;
     }
 
-    gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));
+    gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));   // always tappable
 
     ImGui::End();
     ImGui::PopStyleColor(2);
