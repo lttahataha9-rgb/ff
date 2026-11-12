@@ -78,6 +78,7 @@ struct FltBtnState {
     bool inited = false;
     bool moved = false;
     bool pressed = false;
+    bool toggled = false;   // instant tap applied, awaiting possible drag-cancel
     float travel = 0.0f;
 };
 static FltBtnState gFltBtn[FLTBTN_COUNT];
@@ -108,23 +109,47 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
         b.pos = ImVec2(ds.x - W - 14.0f, 130.0f + idx * (H + 14.0f));
     }
 
-    const bool on = *v;   // live option state (updates next frame after a tap)
+    const bool onPre = *v;   // window chrome (may lag the tap by one frame)
 
     ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(W, H), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, on ? ImVec4(0.05f, 0.07f, 0.10f, 0.62f)
-                                                : ImVec4(0.05f, 0.06f, 0.08f, 0.42f));
-    ImGui::PushStyleColor(ImGuiCol_Border, on ? ImVec4(0.31f, 0.90f, 1.00f, 1.00f)
-                                              : ImVec4(0.31f, 0.90f, 1.00f, 0.38f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, onPre ? ImVec4(0.05f, 0.07f, 0.10f, 0.62f)
+                                                   : ImVec4(0.05f, 0.06f, 0.08f, 0.42f));
+    ImGui::PushStyleColor(ImGuiCol_Border, onPre ? ImVec4(0.31f, 0.90f, 1.00f, 1.00f)
+                                                 : ImVec4(0.31f, 0.90f, 1.00f, 0.38f));
 
     char wname[48];
     snprintf(wname, sizeof(wname), "##fltwin%d", idx);
     ImGui::Begin(wname, nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    // --- input FIRST so label/knob update in the SAME frame (instant tap) ---
+    ImGui::SetCursorPos(ImVec2(0, 0));
+    char bname[48];
+    snprintf(bname, sizeof(bname), "##fltbtn%d", idx);
+    ImGui::InvisibleButton(bname, ImVec2(W, H));
+
+    ImGuiIO &io = ImGui::GetIO();
+    if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (!b.pressed) {
+            // instant response: toggle the moment the finger lands
+            b.pressed = true; b.moved = false; b.travel = 0.0f; b.toggled = true;
+            *v = !*v;
+        }
+        b.travel += fabsf(io.MouseDelta.x) + fabsf(io.MouseDelta.y);
+        if (b.travel > 12.0f) b.moved = true;
+        if (b.moved && b.toggled) { *v = !*v; b.toggled = false; }  // drag = cancel tap
+        if (b.moved) b.pos += io.MouseDelta;
+    }
+    if (b.pressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        b.pressed = false; b.moved = false; b.travel = 0.0f; b.toggled = false;
+    }
+
+    const bool on = *v;   // fresh state — reflects the tap immediately
 
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
@@ -137,23 +162,6 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     // knob: white while ON, dim grey while OFF
     dl->AddCircleFilled(ImVec2(wp.x + W * 0.5f, wp.y + H * 0.63f), 15.0f,
                         on ? IM_COL32(245, 245, 245, 255) : IM_COL32(120, 120, 120, 190), 36);
-
-    ImGui::SetCursorPos(ImVec2(0, 0));
-    char bname[48];
-    snprintf(bname, sizeof(bname), "##fltbtn%d", idx);
-    ImGui::InvisibleButton(bname, ImVec2(W, H));
-
-    ImGuiIO &io = ImGui::GetIO();
-    if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        if (!b.pressed) { b.pressed = true; b.moved = false; b.travel = 0.0f; }
-        b.travel += fabsf(io.MouseDelta.x) + fabsf(io.MouseDelta.y);
-        if (b.travel > 6.0f) b.moved = true;
-        if (b.moved) b.pos += io.MouseDelta;
-    }
-    if (b.pressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-        if (!b.moved) *v = !*v;    // plain tap = toggle the option on/off
-        b.pressed = false; b.moved = false; b.travel = 0.0f;
-    }
 
     gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));   // always tappable
 
@@ -206,47 +214,56 @@ ImFont* Urbanist;
     Style.WindowPadding = ImVec2(8.0f, 8.0f);
     Style.FramePadding = ImVec2(9.0f, 7.0f);
     Style.ScrollbarRounding = 9.0f;
+            // ===== 4xCRYPTED theme: dark panels + cyan accents =====
             ImVec4* colors = ImGui::GetStyle().Colors;
-        colors[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.06f, 0.06f, 1.00f);
-        colors[ImGuiCol_PopupBg] = ImVec4(0.09f, 0.09f, 0.09f, 1.00f);
-        colors[ImGuiCol_FrameBg] = ImVec4(0.19f, 0.19f, 0.19f, 0.54f);
-        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.17f, 0.17f, 0.17f, 0.40f);
-        colors[ImGuiCol_FrameBgActive] = ImVec4(0.31f, 0.31f, 0.31f, 1.00f);
-        colors[ImGuiCol_TitleBg] = ImVec4(0.06f, 0.06f, 0.06f, 1.00f);
-        colors[ImGuiCol_TitleBgActive] = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
-        colors[ImGuiCol_CheckMark] = ImColor(163, 122, 195).Value;
+        const ImColor cyan(79, 228, 255);            // #4FE4FF
+        const ImColor cyanDim(79, 228, 255, 150);
+        colors[ImGuiCol_WindowBg] = ImVec4(0.045f, 0.050f, 0.062f, 0.97f);
+        colors[ImGuiCol_PopupBg] = ImVec4(0.055f, 0.060f, 0.075f, 0.99f);
+        colors[ImGuiCol_ChildBg] = ImVec4(0.060f, 0.065f, 0.080f, 1.00f);
+        colors[ImGuiCol_Border] = ImVec4(0.31f, 0.90f, 1.00f, 0.55f);
+        colors[ImGuiCol_FrameBg] = ImVec4(0.110f, 0.120f, 0.150f, 0.85f);
+        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.150f, 0.180f, 0.220f, 0.90f);
+        colors[ImGuiCol_FrameBgActive] = ImVec4(0.180f, 0.230f, 0.280f, 1.00f);
+        colors[ImGuiCol_TitleBg] = ImVec4(0.060f, 0.070f, 0.090f, 1.00f);
+        colors[ImGuiCol_TitleBgActive] = ImVec4(0.075f, 0.090f, 0.115f, 1.00f);
+        colors[ImGuiCol_CheckMark] = cyan.Value;
+        colors[ImGuiCol_SliderGrab] = cyan.Value;
+        colors[ImGuiCol_SliderGrabActive] = cyan.Value;
+        colors[ImGuiCol_Button] = ImVec4(0.110f, 0.140f, 0.170f, 0.90f);
+        colors[ImGuiCol_ButtonHovered] = ImVec4(0.160f, 0.280f, 0.330f, 1.00f);
+        colors[ImGuiCol_ButtonActive] = ImVec4(0.200f, 0.400f, 0.470f, 1.00f);
+        colors[ImGuiCol_Header] = ImVec4(0.130f, 0.200f, 0.240f, 0.80f);
+        colors[ImGuiCol_HeaderHovered] = ImVec4(0.160f, 0.300f, 0.360f, 0.90f);
+        colors[ImGuiCol_HeaderActive] = ImVec4(0.200f, 0.420f, 0.500f, 1.00f);
+        colors[ImGuiCol_Separator] = ImVec4(0.31f, 0.90f, 1.00f, 0.35f);
+        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.31f, 0.90f, 1.00f, 0.60f);
+        colors[ImGuiCol_SeparatorActive] = ImVec4(0.31f, 0.90f, 1.00f, 0.85f);
+        colors[ImGuiCol_ResizeGrip] = cyanDim.Value;
+        colors[ImGuiCol_ResizeGripHovered] = cyan.Value;
+        colors[ImGuiCol_ResizeGripActive] = cyan.Value;
         colors[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_ScrollbarGrab] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_ScrollbarGrabHovered] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_ScrollbarGrabActive] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_SliderGrab] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_SliderGrabActive] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_Button] = ImVec4(0.24f, 0.24f, 0.24f, 0.40f);
-        colors[ImGuiCol_ButtonHovered] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-        colors[ImGuiCol_ButtonActive] = ImVec4(0.32f, 0.32f, 0.32f, 1.00f);
-        colors[ImGuiCol_Header] = ImVec4(0.73f, 0.73f, 0.73f, 0.31f);
-        colors[ImGuiCol_HeaderHovered] = ImVec4(0.65f, 0.65f, 0.65f, 0.80f);
-        colors[ImGuiCol_HeaderActive] = ImVec4(0.72f, 0.72f, 0.72f, 1.00f);
-        colors[ImGuiCol_Separator] = ImVec4(0.50f, 0.50f, 0.50f, 0.50f);
-        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.52f, 0.52f, 0.52f, 0.78f);
-        colors[ImGuiCol_SeparatorActive] = ImVec4(0.49f, 0.49f, 0.49f, 1.00f);
-        colors[ImGuiCol_ResizeGrip] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_ResizeGripHovered] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_ResizeGripActive] = ImColor(163, 122, 195).Value;
-        colors[ImGuiCol_Tab] = ImVec4(0.17f, 0.17f, 0.17f, 0.86f);
-        colors[ImGuiCol_TabHovered] = ImVec4(0.29f, 0.29f, 0.29f, 0.80f);
-        colors[ImGuiCol_TabActive] = ImVec4(0.40f, 0.40f, 0.40f, 1.00f);
-        colors[ImGuiCol_TabUnfocused] = ImVec4(0.11f, 0.11f, 0.11f, 0.97f);
-        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.17f, 0.17f, 0.17f, 1.00f);
-        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.59f, 0.11f, 0.11f, 0.35f);
-        colors[ImGuiCol_NavHighlight] = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
-        ImGui::GetStyle().Colors[ImGuiCol_WindowBg] = ImColor(28, 28, 30);
-        ImGui::GetStyle().Colors[ImGuiCol_Border] = ImColor(36, 36, 38);
-        ImGui::GetStyle().Colors[ImGuiCol_ChildBg] = ImColor(36, 36, 38);
+        colors[ImGuiCol_ScrollbarGrab] = cyanDim.Value;
+        colors[ImGuiCol_ScrollbarGrabHovered] = cyanDim.Value;
+        colors[ImGuiCol_ScrollbarGrabActive] = cyan.Value;
+        colors[ImGuiCol_Tab] = ImVec4(0.090f, 0.100f, 0.125f, 0.90f);
+        colors[ImGuiCol_TabHovered] = ImVec4(0.250f, 0.560f, 0.650f, 0.90f);
+        colors[ImGuiCol_TabActive] = ImVec4(0.140f, 0.300f, 0.360f, 1.00f);
+        colors[ImGuiCol_TabUnfocused] = ImVec4(0.070f, 0.075f, 0.090f, 0.97f);
+        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.110f, 0.150f, 0.180f, 1.00f);
+        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.31f, 0.90f, 1.00f, 0.35f);
+        colors[ImGuiCol_NavHighlight] = cyan.Value;
+        colors[ImGuiCol_Text] = ImVec4(0.86f, 0.90f, 0.94f, 1.00f);
 
-        ImGui::GetStyle().WindowRounding = 8 / 1.5f;
-        ImGui::GetStyle().FrameRounding = 4 / 1.5f;
-        ImGui::GetStyle().ChildRounding = 6 / 1.5f;
+        ImGui::GetStyle().WindowRounding = 12.0f;
+        ImGui::GetStyle().FrameRounding = 7.0f;
+        ImGui::GetStyle().ChildRounding = 10.0f;
+        ImGui::GetStyle().GrabRounding = 6.0f;
+        ImGui::GetStyle().ScrollbarRounding = 8.0f;
+        ImGui::GetStyle().TabRounding = 6.0f;
+        ImGui::GetStyle().WindowBorderSize = 1.5f;
+        ImGui::GetStyle().WindowPadding = ImVec2(12.0f, 10.0f);
+        ImGui::GetStyle().ItemSpacing = ImVec2(10.0f, 8.0f);
     ImFont* font = io.Fonts->AddFontFromMemoryTTF(sansbold, sizeof(sansbold), 15.0f, NULL, io.Fonts->GetGlyphRangesCyrillic());
     verdana_smol = io.Fonts->AddFontFromMemoryTTF(verdana, sizeof verdana, 40, NULL, io.Fonts->GetGlyphRangesCyrillic());
     pixel_big = io.Fonts->AddFontFromMemoryTTF((void*)smallestpixel, sizeof smallestpixel, 128, NULL, io.Fonts->GetGlyphRangesCyrillic());
@@ -380,9 +397,9 @@ ImFont* Urbanist;
     ImGui::SetNextWindowSize(ImVec2(365, 270), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
             {                
-                ImGui::Begin(oxorany("  @MODDER - FreeFire 1.132.X"), &MenDeal);
+                ImGui::Begin(oxorany("  4xCRYPTED  |  FreeFire 1.132.X"), &MenDeal);
                 if (ImGui::BeginTabBar(oxorany("Tab"),ImGuiTabBarFlags_FittingPolicyScroll)) {
-                    if (ImGui::BeginTabItem(("Modder - ESP"))) {
+                    if (ImGui::BeginTabItem(("ESP"))) {
                     ImGui::Checkbox(oxorany("ESP master"), &Vars.Enable);
                         if (ImGui::BeginTable("split", 4))
                     {
@@ -408,7 +425,7 @@ ImFont* Urbanist;
                         ImGui::Checkbox(oxorany("Enemy Count"), &Vars.enemycount);
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem(("Modder - Aimbot"))) {
+                    if (ImGui::BeginTabItem(("AIMBOT"))) {
                             ImGui::Spacing();
                             ImGui::Checkbox(oxorany("Aimbot"), &Vars.Aimbot);
                             ImGui::Combo(oxorany("Trigger"), &Vars.AimWhen, Vars.dir, 4);
@@ -419,7 +436,7 @@ ImFont* Urbanist;
                             }
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem(("Modder - Igg"))) {
+                    if (ImGui::BeginTabItem(("FEATURES"))) {
                         ImGui::Spacing();
                         ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest);
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 80.0f, "%.f");
@@ -431,9 +448,11 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem(("Modder - Info"))) {
-
-
+                    if (ImGui::BeginTabItem(("INFO"))) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.31f, 0.90f, 1.00f, 1.00f), "4xCRYPTED");
+                        ImGui::Text("FreeFire 1.132.X");
+                        ImGui::TextDisabled("Telekill / Fly V2 / Ninja Run");
                         ImGui::EndTabItem();
                     }
                     ImGui::EndTabBar();

@@ -739,7 +739,7 @@ void aimbot()
 }
 void draw_watermark()
 {
-    std::string claw = oxorany("");
+    std::string claw = oxorany("4xCRYPTED");
     ImVec2 text_size = verdana_smol->calc_size(16, claw);
     ImVec2 text_pos(
         10, // Left margin
