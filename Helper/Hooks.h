@@ -890,6 +890,59 @@ void RunFlyV2()
 
     Vector3 pos = game_sdk->get_position(tf);
 
+    // >>> FlyV2 v2: FLIGHT l'WAST dyal l'zone l'amnina (safe zone center)
+    //     chain mn dump iOS (fail-closed, machi mn Android):
+    //       match(JMAGGLCNGIG) + 0x210 = SafeZone
+    //       SafeZone + 0xB8          = ZoneDefinition (BNINENNKABI)
+    //       ZoneDefinition + 0x14    = OuterCenter (Vector3), + 0x20 = OuterRadius
+    //     (layout 64-bit — nefs struct dyal Android 32-bit ghir header +8)
+    {
+        void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
+        if (safeZone)
+        {
+            void *zoneDef = *(void **)((uintptr_t)safeZone + oxo("0xB8"));
+            if (zoneDef)
+            {
+                Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
+                float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
+                // zone me3mar (>=10m) → m3niha; la → hover fallback (l'blasa l'9dima)
+                if (zoneR >= 10.0f)
+                {
+                    Vector3 target;
+                    target.x = zoneC.x;
+                    target.y = zoneC.y + Vars.flyhei; // flyhei = altitude 3la l'wasst
+                    target.z = zoneC.z;
+
+                    // momentum flight: flySpeed (0-100) = speed; 0.75 default → 1.8%/frame
+                    // (frame-based, bla ImGui deps) → kaywsel f ~2-3s; 100 = instant (snapped)
+                    float step = Vars.flySpeed * 0.024f;
+                    if (step > 1.0f)
+                        step = 1.0f;
+                    if (step < 0.0f)
+                        step = 0.0f;
+
+                    Vector3 np;
+                    np.x = pos.x + (target.x - pos.x) * step;
+                    np.y = pos.y + (target.y - pos.y) * step;
+                    np.z = pos.z + (target.z - pos.z) * step;
+
+                    // snap qbl ma ywessel (exponential lerp kay9arrb bla ma ywessel)
+                    float dx = target.x - np.x, dy = target.y - np.y, dz = target.z - np.z;
+                    if ((dx * dx + dy * dy + dz * dz) < 1.0f)
+                    {
+                        np.x = target.x;
+                        np.y = target.y;
+                        np.z = target.z;
+                    }
+
+                    Transform_SetPosition(tf, np);
+                    return;
+                }
+            }
+        }
+        // zone ma mawjoudach (lobby / pre-phase / null) → hover fallback
+    }
+
     if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeY == 0.0f && FlyalturaEXposeZ == 0.0f) ||
         FlyalturaEXpose == nullptr)
     {
