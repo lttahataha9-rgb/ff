@@ -35,7 +35,7 @@ struct Vars_t
     bool fly = {};        // RUNN (ninja run)
     bool Flyingtest = {}; // Fly V2
     float flySpeed = 0.75f;
-    float flyhei = 0.0f;
+    float flyhei = 300.0f; // FlyV2 sky altitude (video ref = f l'jouj; 0 = ground zone center)
     float khoangcach = 10.0f;
 } Vars;
 
@@ -863,6 +863,10 @@ void RunFly()
 }
 
 // ---- Fly V2: stay at the height you enabled it on (+ Fly Height) ----
+// FlyV2 teleport/pin state (debug UI line f FEATURES tab)
+static int flyZSt = 0;        // 0 off / 1 zone center / 2 SafeZone null / 3 ZoneDef null / 4 radius ghda2a (sky fallback)
+static float flyZR = 0.0f;    // OuterRadius (debug)
+
 void RunFlyV2()
 {
     if (!Vars.Flyingtest)
@@ -871,6 +875,8 @@ void RunFlyV2()
         FlyalturaEXposeY = 0.0f;
         FlyalturaEXposeZ = 0.0f;
         FlyalturaEXpose = nullptr;
+        flyZSt = 0;
+        flyZR = 0.0f;
         return;
     }
 
@@ -890,73 +896,53 @@ void RunFlyV2()
 
     Vector3 pos = game_sdk->get_position(tf);
 
-    // >>> FlyV2 v2: FLIGHT l'WAST dyal l'zone l'amnina (safe zone center)
+    // >>> FlyV2 v4: TELEPORT instant + PIN continuous (video ref: ground →
+    //     instant SKY, senna sotra f l'jouj w ybqa kayqtel men l'fou9 = BOOYAH)
+    //     user: "yteleportini l centre dyal l'blasa l'amnina, ma kijerrenich"
+    //     - zone mawjouda → (zoneCenter X/Z) + flyhei Y = wast l'blasa l'amnina
+    //     - zone null    → sky 3la nefs l'X/Z (fallback, st=2/3/4)
+    //     PIN kol frame (continuous set) = gravity ma yhbetich, w zone li
+    //     kat9tar kat9elleb m3aha (center ytsarra f kol frame)
     //     chain mn dump iOS (fail-closed, machi mn Android):
     //       match(JMAGGLCNGIG) + 0x210 = SafeZone
     //       SafeZone + 0xB8          = ZoneDefinition (BNINENNKABI)
     //       ZoneDefinition + 0x14    = OuterCenter (Vector3), + 0x20 = OuterRadius
-    //     (layout 64-bit — nefs struct dyal Android 32-bit ghir header +8)
     {
         void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
-        if (safeZone)
+        void *zoneDef = safeZone ? *(void **)((uintptr_t)safeZone + oxo("0xB8")) : nullptr;
+        Vector3 target;
+        bool gotZone = false;
+        if (zoneDef)
         {
-            void *zoneDef = *(void **)((uintptr_t)safeZone + oxo("0xB8"));
-            if (zoneDef)
+            Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
+            float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
+            flyZR = zoneR;
+            if (zoneR >= 10.0f)
             {
-                Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
-                float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
-                // zone me3mar (>=10m) → m3niha; la → hover fallback (l'blasa l'9dima)
-                if (zoneR >= 10.0f)
-                {
-                    Vector3 target;
-                    target.x = zoneC.x;
-                    target.y = zoneC.y + Vars.flyhei; // flyhei = altitude 3la l'wasst
-                    target.z = zoneC.z;
-
-                    // momentum flight: flySpeed (0-100) = speed; 0.75 default → 1.8%/frame
-                    // (frame-based, bla ImGui deps) → kaywsel f ~2-3s; 100 = instant (snapped)
-                    float step = Vars.flySpeed * 0.024f;
-                    if (step > 1.0f)
-                        step = 1.0f;
-                    if (step < 0.0f)
-                        step = 0.0f;
-
-                    Vector3 np;
-                    np.x = pos.x + (target.x - pos.x) * step;
-                    np.y = pos.y + (target.y - pos.y) * step;
-                    np.z = pos.z + (target.z - pos.z) * step;
-
-                    // snap qbl ma ywessel (exponential lerp kay9arrb bla ma ywessel)
-                    float dx = target.x - np.x, dy = target.y - np.y, dz = target.z - np.z;
-                    if ((dx * dx + dy * dy + dz * dz) < 1.0f)
-                    {
-                        np.x = target.x;
-                        np.y = target.y;
-                        np.z = target.z;
-                    }
-
-                    Transform_SetPosition(tf, np);
-                    return;
-                }
+                target.x = zoneC.x;
+                target.y = zoneC.y + Vars.flyhei;
+                target.z = zoneC.z;
+                flyZSt = 1; // zone center + sky altitude
+                gotZone = true;
+            }
+            else
+            {
+                flyZSt = 4;
             }
         }
-        // zone ma mawjoudach (lobby / pre-phase / null) → hover fallback
-    }
-
-    if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeY == 0.0f && FlyalturaEXposeZ == 0.0f) ||
-        FlyalturaEXpose == nullptr)
-    {
-        if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeZ == 0.0f) ||
-            FlyalturaEXpose == nullptr)
+        else
         {
-            FlyalturaEXposeX = pos.x;
-            FlyalturaEXposeZ = pos.z;
-            FlyalturaEXpose = localPlayer;
+            flyZSt = safeZone ? 3 : 2;
         }
-        FlyalturaEXposeY = pos.y;
+        if (!gotZone)
+        {
+            // fallback: sky 3la nefs l'X/Z — katchouf video: yteleporti l'jouj
+            target.x = pos.x;
+            target.y = pos.y + Vars.flyhei;
+            target.z = pos.z;
+        }
+        Transform_SetPosition(tf, target); // TELEPORT instant + PIN (continuous)
     }
-
-    Transform_SetPosition(tf, Vector3(pos.x, FlyalturaEXposeY + Vars.flyhei, pos.z));
 }
 
 // ---- closest alive enemy (used by Telekill) ----
@@ -1205,6 +1191,140 @@ static bool AikInRange(void *local, void *enemy, void *weapon)
     return Vector3::Distance(h1, h2) <= maxRange;
 }
 
+// --- AimKill Send v2 (gaps from Android port) --------------------------------
+// Telemetry: st = last RunAimKillSend gate (1 init / 2 no-match / 3 not-live /
+// 4 no-gun / 5 no-hitInfo / 6 no-players / 7 no-firePos / 8 no-cands / 9 ran),
+// n = candidate count, s = packets sent. Shown in the FEATURES tab.
+static int aikDbgSt = 0, aikDbgN = 0, aikDbgSent = 0;
+
+static bool aikStrEq(const char *a, const char *b)
+{
+    if (!a || !b)
+        return false;
+    while (*a && *a == *b)
+    {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+// Android ComputeAndStoreHashExact (EliteMain L3644-3663) — gated by
+// EnableHitTagHackCheck @ GameModeSetting+0xD50 (Android 0xB68, iOS offset
+// from dump). Writes hash int at weapon+0x40 = CDMMCIIFHGM.HOKKGGGLJIE
+// (protected uint @0x40, COW.GamePlay — nefs l'slot dyal Android attackerController[16]).
+// Hash chain: GGGBOOOFFOE() static byte[] (elements @0x18 f il2cpp64) ← tick
+// @+0, seed @+4; HAEEBMELLEG() static HMACSHA256 → HashAlgorithm.ComputeHash
+// → BitConverter.ToInt32(bytes,0) → store.
+// tick = TimeService.m_TickCount @+0x20 (Android +0x18 = their tick field).
+// Hash semantics: iOS EAJDPCJDMFG = float(uint) → int-cast = identity,
+// Android's int(hash) therefore == raw tick/seed mix → ghir nstore-ih direct.
+static void AikStoreHitHash(void *weapon, void *target, uint32_t tick)
+{
+    static int st = 0; // 0 untried / 1 ok / -1 resolve failed (fail-closed)
+    static void *(*CurrentGameModeSetting)() = nullptr;
+    static void *(*GetHitBytes)() = nullptr;
+    static void *(*GetHitHmac)() = nullptr;
+    static void *(*HashCompute)(void *, void *) = nullptr;
+    static int (*HashToInt)(void *, int) = nullptr;
+    static uint32_t (*IdToU32)(void *) = nullptr;
+    static void *(*GetPlayerID)(void *) = nullptr;
+    if (st == 0)
+    {
+        CurrentGameModeSetting = (void *(*)())getRealOffset(oxo("0x59144D0")); // CurrentGameModeSetting
+        GetHitBytes = (void *(*)())getRealOffset(oxo("0x61C55C0"));             // KMLICIEHMHC.GGGBOOOFFOE byte[]
+        GetHitHmac = (void *(*)())getRealOffset(oxo("0x61C56A8"));              // KMLICIEHMHC.HAEEBMELLEG HMACSHA256
+        HashCompute = (void *(*)(void *, void *))getRealOffset(oxo("0x8993C1C")); // HashAlgorithm.ComputeHash(byte[])
+        HashToInt = (int (*)(void *, int))getRealOffset(oxo("0x8A92320"));     // BitConverter.ToInt32(byte[],0)
+        IdToU32 = aik.IdToU32;
+        GetPlayerID = aik.GetPlayerID;
+        if (!CurrentGameModeSetting || !GetHitBytes || !GetHitHmac ||
+            !HashCompute || !HashToInt || !IdToU32 || !GetPlayerID)
+        {
+            st = -1;
+            return;
+        }
+        st = 1;
+    }
+    if (st != 1 || !weapon || !target)
+        return;
+    void *gms = CurrentGameModeSetting();
+    if (!gms)
+        return;
+    if (!*(uint8_t *)((uintptr_t)gms + 0xD50))
+        return; // EnableHitTagHackCheck OFF → no-op (server wields hash only when on)
+    void *arr = GetHitBytes();
+    if (!arr)
+        return;
+    void *hmac = GetHitHmac();
+    if (!hmac)
+        return;
+    uint32_t seed = IdToU32(GetPlayerID(target));
+    // il2cpp64 Il2CppArray header = 32 bytes (0x20): obj 16 + bounds 8 + max_length 8
+    // (Android 32-bit = 0x10 — nefs l'masdar: obj8+bounds4+len4)
+    uint8_t *data = (uint8_t *)((uintptr_t)arr + 0x20);
+    *(uint32_t *)(data + 0) = tick;
+    *(uint32_t *)(data + 4) = seed;
+    void *hb = HashCompute(hmac, arr);
+    if (!hb)
+        return;
+    *(uint32_t *)((uintptr_t)weapon + 0x40) = (uint32_t)HashToInt(hb, 0);
+}
+
+// Android CheckParametros shuffle-validate (EliteMain L2836-2845):
+// GameVarDef.EnableShuffleParams static bool @ statics+0x44E8 (dump L277618);
+// NCHOCBKLNEJ.Validate(weapon, params, seedEnc) = 0x5C2B3F0.
+// statics base via il2cpp API (dlsym) — fail-closed: la kan API machi
+// exported f l'binary → skip (no guessing, Android same order).
+static void AikShuffleValidate(void *weapon, void *params, uint32_t seedEnc)
+{
+    static int st = 0; // 0 untried / 1 ok / -1 no API (fail-closed)
+    static void *(*fDomGet)() = nullptr;
+    static void *(*fAsmList)(void *, size_t *) = nullptr;
+    static void *(*fAsmImg)(void *) = nullptr;
+    static const char *(*fImgName)(void *) = nullptr;
+    static void *(*fClsName)(void *, const char *, const char *) = nullptr;
+    static void *(*fStatics)(void *) = nullptr;
+    static void (*fValidate)(void *, void *, uint32_t) = nullptr;
+    if (st == 0)
+    {
+        fDomGet = (void *(*)())dlsym(RTLD_DEFAULT, "il2cpp_domain_get");
+        fAsmList = (void *(*)(void *, size_t *))dlsym(RTLD_DEFAULT, "il2cpp_domain_get_assemblies");
+        fAsmImg = (void *(*)(void *))dlsym(RTLD_DEFAULT, "il2cpp_assembly_get_image");
+        fImgName = (const char *(*)(void *))dlsym(RTLD_DEFAULT, "il2cpp_image_get_name");
+        fClsName = (void *(*)(void *, const char *, const char *))dlsym(RTLD_DEFAULT, "il2cpp_class_from_name");
+        fStatics = (void *(*)(void *))dlsym(RTLD_DEFAULT, "il2cpp_class_get_static_fields");
+        fValidate = (void (*)(void *, void *, uint32_t))getRealOffset(oxo("0x5C2B3F0")); // NCHOCBKLNEJ.Validate
+        st = (fDomGet && fAsmList && fAsmImg && fImgName && fClsName && fStatics && fValidate) ? 1 : -1;
+        if (st == -1)
+            return;
+    }
+    if (st != 1 || !weapon || !params)
+        return;
+    size_t nAsm = 0;
+    void **asms = fAsmList(fDomGet(), &nAsm);
+    if (!asms || !nAsm)
+        return;
+    void *img = nullptr;
+    for (size_t i = 0; i < nAsm && !img; i++)
+    {
+        void *a = fAsmImg(asms[i]);
+        if (a && aikStrEq(fImgName(a), "Assembly-CSharp.dll"))
+            img = a;
+    }
+    if (!img)
+        return;
+    void *klass = fClsName(img, "COW", "GameVarDef");
+    if (!klass)
+        return;
+    void *statics = fStatics(klass);
+    if (!statics)
+        return;
+    if (!*(uint8_t *)((uintptr_t)statics + 0x44E8))
+        return; // EnableShuffleParams OFF → skip
+    fValidate(weapon, params, seedEnc);
+}
+
 // AimkillSendStrike — fill the local player's hit-object scratch, then build
 // and send the damage packet. Field order/semantics mirror the Android body.
 static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos, void *target)
@@ -1213,7 +1333,10 @@ static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos,
         return false;
     if (game_sdk->get_IsDieing(target) || game_sdk->GetHp(target) <= 0)
         return false;
-    if (!game_sdk->get_isVisible(target))
+    // raycast LOS = Android isVisible_Aimbot semantics (tanghinh::isVisible =
+    // nefs Physics_Raycast layer12 li khdem f ESP — get_isVisible flag = ghlt
+    // w mab9ach f candidates zada, Android candidate loop ma 3ndoch visibility)
+    if (!tanghinh::isVisible(target))
         return false;
 
     void *headCollider = aik.HeadCollider(target);
@@ -1242,15 +1365,21 @@ static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos,
     void *msg = aik.MakeDamageMsg(local); // -> EBEDJLFHHHP
     if (!msg)
         return false;
+
+    // Android order: ComputeAndStoreHashExact BEFORE CheckParametros (L2827→2828)
+    uint32_t enemyId = aik.IdToU32(aik.GetPlayerID(target));
+    AikStoreHitHash(weapon, target, *(uint32_t *)((uintptr_t)timeService + 0x20));
+
     void *checkParams = aik.CheckParams(weapon, aiming, headCollider, false, (void *)0);
     if (!checkParams)
         return false;
+    // Android: shuffle-validate right after CheckParametros (L2836-2845)
+    AikShuffleValidate(weapon, checkParams, enemyId); // seedEnc = IdToU32(enemyID)
 
     aik.StartFiring(local, weapon);
 
     // EBEDJLFHHHP fields — same type order as the Android message struct:
     // attacker/hp/zero/damage|part/victim/weapon/uniq/part/tick/...
-    uint32_t enemyId = aik.IdToU32(aik.GetPlayerID(target));
     uint32_t localId = aik.IdToU32(aik.GetPlayerID(local));
     *(uint32_t *)((uintptr_t)msg + 0x14) = enemyId;                              // NMGDAKFKJLH attacker id
     *(uint16_t *)((uintptr_t)msg + 0x18) = (uint16_t)game_sdk->GetHp(target);    // GJCLHNBCABF hp
@@ -1273,6 +1402,7 @@ static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos,
     *(uint8_t *)((uintptr_t)msg + 0x74) = 0;                                     // ACJANANIPIM
 
     aik.Send(106, msg, 2, 0); // opcode 106 = C2S_RUDP_TakeDamage_Req
+    aikDbgSent++;
 
     aik.StopFire(local, weapon);
     aik.ResetSwapTime(local); // opcode-108 Syns_SwapWeapon_Impl skipped (see header)
@@ -1298,32 +1428,53 @@ void RunAimKillSend()
     if (busy)
         return;
     if (!AikInit())
+    {
+        aikDbgSt = 1;
         return;
+    }
 
     busy = true;
     do
     {
         void *match = game_sdk->Curent_Match();
         if (!match)
+        {
+            aikDbgSt = 2;
             break;
+        }
         void *local = game_sdk->GetLocalPlayer(match);
         if (!local || game_sdk->get_MaxHP(local) <= 0 || game_sdk->get_IsDieing(local))
-            break; // lobby / dead: not a live player
+        {
+            aikDbgSt = 3; // lobby / dead: not a live player
+            break;
+        }
         void *weapon = aik.GetWeaponOnHand(local);
         if (!weapon || !AikIsValidGun(weapon))
+        {
+            aikDbgSt = 4;
             break;
+        }
         void *hitInfo = *(void **)((uintptr_t)local + 0xE50); // Player.FDMIEDDNCEC -> CGKJLKPMGDJ
         if (!hitInfo)
+        {
+            aikDbgSt = 5;
             break;
+        }
 
         Dictionary<uint8_t *, void **> *players =
             *(Dictionary<uint8_t *, void **> **)((long)match + 0x148);
         if (!players)
+        {
+            aikDbgSt = 6;
             break;
+        }
 
         Vector3 firePos;
         if (!AikHeadPos(local, &firePos) || firePos == Vector3::zero())
+        {
+            aikDbgSt = 7;
             break;
+        }
 
         // candidates: alive, non-teammate, visible, in weapon range — scored
         // by crosshair distance with the behind-camera z-check (Android order)
@@ -1344,8 +1495,8 @@ void RunAimKillSend()
                 continue;
             if (aik.IsLocalTeammate(p))
                 continue;
-            if (!game_sdk->get_isVisible(p))
-                continue;
+            // NO visibility filter here = Android candidate loop (visibility
+            // kaytsenna ghir f AikStrike b raycast tanghinh::isVisible)
             if (!AikInRange(local, p, weapon))
                 continue;
             Vector3 head;
@@ -1368,8 +1519,13 @@ void RunAimKillSend()
             score[n] = s;
             n++;
         }
+        aikDbgN = n;
         if (n == 0)
+        {
+            aikDbgSt = 8;
             break;
+        }
+        aikDbgSt = 9; // all gates passed — strikes running
 
         // sort by score (bubble — n <= 64, avoids any <algorithm> dependency)
         for (int i = 0; i < n; i++)

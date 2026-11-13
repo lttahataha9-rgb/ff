@@ -464,7 +464,8 @@ ImFont* Urbanist;
                     if (ImGui::BeginTabItem(("FEATURES"))) {
                         ImGui::Spacing();
                         ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest);
-                        ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 80.0f, "%.f");
+                        ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
+                        ImGui::Text("Zone: %d r:%.0f", flyZSt, flyZR); // 1=TP dir / 2,3,4=zone null
                         ImGui::Spacing();
                         ImGui::Checkbox(oxorany("Button RUNN"), &Vars.fly);
                         ImGui::SliderFloat(oxorany("Runn?"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
@@ -473,6 +474,7 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
                         ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend);
+                        ImGui::Text("Aik: st:%d n:%d s:%d", aikDbgSt, aikDbgN, aikDbgSent); // st9=n mzyan, s>0=tsendat
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem(("INFO"))) {
