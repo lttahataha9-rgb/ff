@@ -31,6 +31,7 @@ struct Vars_t
 
     // ---- ported from X96 2Ripper: Telekill / Fly V2 / Ninja Run ----
     bool Telekill = {};
+    bool AimKillSend = {}; // SEND button: crafts the game's own C2S damage packet (Android EliteXzp port)
     bool fly = {};        // RUNN (ninja run)
     bool Flyingtest = {}; // Fly V2
     float flySpeed = 0.75f;
@@ -1000,4 +1001,353 @@ void RunTelekill()
     }
 
     Transform_SetPosition(_LocalTF, targetPos);
+}
+
+// ===========================================================================
+// AimKill Send — ported from the Android EliteXzp project (StartAimKillSend /
+// AimkillSendStrike). Builds the game's own C2S_RUDP_TakeDamage_Req packet
+// (opcode 106) from the LOCAL player's real weapon + hit-object scratch, so
+// the server accepts it as a normal hit. Every RVA below comes straight from
+// the iOS 1.132.X dump.cs — fail-closed: if the dladdr image check or any
+// pointer fails, the feature stays silently off (no guessing, no crash).
+//
+// Deliberately skipped (extra Android runtime lookups / modes):
+//   - ComputeAndStoreHashExact (EnableHitTagHackCheck — server-gated)
+//   - CheckParametros validate shuffle (EnableShuffleParams statics)
+//   - Syns_SwapWeapon_Impl opcode-108 sync (needs il2cpp object_new; the
+//     dump has no factory method for message EOBFCLNNIJH)
+//   - AimMethodPull / 360v2 aim-focus / anti-invisible / football extras
+// ===========================================================================
+
+// BEADLMGGGGL is a 24-byte value struct in the dump (u32 @0x10, u32 @0x14,
+// u8 @0x18, u8 @0x19, u64 @0x20). AAPCS64 returns it through a hidden
+// pointer (x8) and passes >16B composites by reference — an identical C
+// layout makes clang emit exactly the il2cpp ABI.
+struct AikPlayerId {
+    uint32_t a; // 0x10
+    uint32_t b; // 0x14
+    uint8_t  c; // 0x18
+    uint8_t  d; // 0x19
+    uint64_t v; // 0x20
+}; // size 0x18
+
+static struct AikFns_t {
+    void        *(*GetWeaponOnHand)(void *);            // Player.GetWeaponOnHand
+    void        *(*HeadCollider)(void *);               // Player.get_HeadCollider
+    void        *(*GameObjectOf)(void *);               // Component.get_gameObject
+    void        *(*GetAiming)(void *, void *);          // Player.JGIEOGCGFEP -> interface ptr
+    AikPlayerId (*GetPlayerID)(void *);                 // Player.get_PlayerID -> struct
+    uint32_t    (*IdToU32)(AikPlayerId);                // BEADLMGGGGL.DEIPJDIGKIP(struct)->uint
+    int         (*GetDamage)(void *);                   // HBIBDMMOOOK.KBIFKMJODNA
+    uint32_t    (*GetWeaponID)(void *);                 // IEFJGCGOMID.MJCENIGKEPH
+    float       (*GetRange)(void *);                    // HBIBDMMOOOK.OEOBPHDFJMO
+    void        *(*TimeService)();                      // GameFacade.CurrentGameSimulationTimer
+    void        *(*MakeDamageMsg)(void *);              // PhyXShield.GLEMOCGDGHM -> EBEDJLFHHHP
+    void        *(*MakeVecMsg)(Vector3);                // message.LMCBHLCPAJD.DJNIOABIFCA
+    void        *(*CheckParams)(void *, void *, void *, bool, void *); // HBIBDMMOOOK.NPLMKLBKJPE
+    bool        (*Send)(uint32_t, void *, uint8_t, bool);              // GameFacade.Send
+    void        (*StartFiring)(void *, void *);         // PlayerNetwork.StartFiring
+    void        (*StopFire)(void *, void *);            // PlayerNetwork.StopFire
+    void        (*SwapWeapon)(void *, int32_t, bool, void *);          // PlayerNetwork.SwapWeapon
+    void        (*ResetSwapTime)(void *);               // Player.ResetSwapWeaponTime
+    float       (*Realtime)();                          // Time.get_realtimeSinceStartup
+    bool        (*IsLocalTeammate)(void *);             // GameFacade.IsLocalTeammate (static)
+} aik;
+
+static bool AikInit()
+{
+    static int state = 0; // 0 untried / 1 ok / -1 failed (fail-closed)
+    if (state != 0)
+        return state == 1;
+
+    // sanity: the anchor RVA must resolve inside a loaded image (same dladdr
+    // pattern as FF_SET_POSITION_OFFSET) — a bad slide disables the feature,
+    // never the game.
+    Dl_info info;
+    if (!dladdr((void *)getRealOffset(0x5926D78), &info) || !info.dli_fname)
+    {
+        state = -1;
+        return false;
+    }
+
+    aik.GetWeaponOnHand = (void *(*)(void *))getRealOffset(oxo("0x5616118"));
+    aik.HeadCollider = (void *(*)(void *))getRealOffset(oxo("0x5634F3C"));
+    aik.GameObjectOf = (void *(*)(void *))getRealOffset(oxo("0x8D59C7C"));
+    aik.GetAiming = (void *(*)(void *, void *))getRealOffset(oxo("0x56A7F5C"));
+    aik.GetPlayerID = (AikPlayerId (*)(void *))getRealOffset(oxo("0x55FE154"));
+    aik.IdToU32 = (uint32_t (*)(AikPlayerId))getRealOffset(oxo("0x649046C"));
+    aik.GetDamage = (int (*)(void *))getRealOffset(oxo("0x5BF4148"));
+    aik.GetWeaponID = (uint32_t (*)(void *))getRealOffset(oxo("0x5B0B8EC"));
+    aik.GetRange = (float (*)(void *))getRealOffset(oxo("0x5BED0A8"));
+    aik.TimeService = (void *(*)())getRealOffset(oxo("0x5919E58"));
+    aik.MakeDamageMsg = (void *(*)(void *))getRealOffset(oxo("0x607E1DC"));
+    aik.MakeVecMsg = (void *(*)(Vector3))getRealOffset(oxo("0x3715AC4"));
+    aik.CheckParams = (void *(*)(void *, void *, void *, bool, void *))getRealOffset(oxo("0x5C262DC"));
+    aik.Send = (bool (*)(uint32_t, void *, uint8_t, bool))getRealOffset(oxo("0x5926D78"));
+    aik.StartFiring = (void (*)(void *, void *))getRealOffset(oxo("0x5A5B868"));
+    aik.StopFire = (void (*)(void *, void *))getRealOffset(oxo("0x5A5C464"));
+    aik.SwapWeapon = (void (*)(void *, int32_t, bool, void *))getRealOffset(oxo("0x5A5C7E8"));
+    aik.ResetSwapTime = (void (*)(void *))getRealOffset(oxo("0x5636DFC"));
+    aik.Realtime = (float (*)())getRealOffset(oxo("0x8D667EC"));
+    aik.IsLocalTeammate = (bool (*)(void *))getRealOffset(oxo("0x591C5B4"));
+
+    if (!aik.GetWeaponOnHand || !aik.HeadCollider || !aik.GameObjectOf ||
+        !aik.GetAiming || !aik.GetPlayerID || !aik.IdToU32 || !aik.GetDamage ||
+        !aik.GetWeaponID || !aik.GetRange || !aik.TimeService || !aik.MakeDamageMsg ||
+        !aik.MakeVecMsg || !aik.CheckParams || !aik.Send || !aik.StartFiring ||
+        !aik.StopFire || !aik.SwapWeapon || !aik.ResetSwapTime || !aik.Realtime ||
+        !aik.IsLocalTeammate)
+    {
+        state = -1;
+        return false;
+    }
+    state = 1;
+    return true;
+}
+
+// null-checked head position (the plain GetHeadPosition helper doesn't guard
+// a missing head transform)
+static bool AikHeadPos(void *p, Vector3 *out)
+{
+    if (!p)
+        return false;
+    void *tf = game_sdk->GetHeadPositions(p);
+    if (!tf)
+        return false;
+    *out = game_sdk->get_position(tf);
+    return true;
+}
+
+// Android IsValidGun — weapon-id blacklist (fists / throwables / vehicles)
+static bool AikIsValidGun(void *weapon)
+{
+    if (!weapon)
+        return false;
+    int32_t weaponId = (int32_t)aik.GetWeaponID(weapon);
+    if (weaponId <= 1 ||
+        weaponId == 16 || weaponId == 17 || weaponId == 27 || weaponId == 34 || weaponId == 51 || weaponId == 53 ||
+        (weaponId >= 600 && weaponId < 700) ||
+        (weaponId >= 1000 && weaponId < 1100) ||
+        (weaponId >= 1200 && weaponId < 1300) ||
+        (weaponId >= 1400 && weaponId < 1500) ||
+        (weaponId >= 6000 && weaponId < 6100) ||
+        (weaponId >= 9400 && weaponId < 9500))
+    {
+        return false;
+    }
+    return true;
+}
+
+// isEnemyInRangeWeapon — range rule copied from Android: r <= 2 means the
+// weapon reports km-ish units (r*250), otherwise metres, default 120 m.
+static bool AikInRange(void *local, void *enemy, void *weapon)
+{
+    Vector3 h1, h2;
+    if (!AikHeadPos(local, &h1) || !AikHeadPos(enemy, &h2))
+        return false;
+    float maxRange = 120.0f;
+    float r = aik.GetRange(weapon);
+    if (r > 0.0f)
+        maxRange = (r <= 2.0f) ? (r * 250.0f) : r;
+    return Vector3::Distance(h1, h2) <= maxRange;
+}
+
+// AimkillSendStrike — fill the local player's hit-object scratch, then build
+// and send the damage packet. Field order/semantics mirror the Android body.
+static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos, void *target)
+{
+    if (!local || !weapon || !hitInfo || !target)
+        return false;
+    if (game_sdk->get_IsDieing(target) || game_sdk->GetHp(target) <= 0)
+        return false;
+    if (!game_sdk->get_isVisible(target))
+        return false;
+
+    void *headCollider = aik.HeadCollider(target);
+    if (!headCollider)
+        return false;
+    void *headGameObject = aik.GameObjectOf(headCollider);
+    if (!headGameObject)
+        return false;
+
+    // CGKJLKPMGDJ: JHAINOBIFMA @0x18 (GameObject), JINDNOFABKB @0x20 (collider)
+    *(void **)((uintptr_t)hitInfo + 0x18) = headGameObject;
+    *(void **)((uintptr_t)hitInfo + 0x20) = headCollider;
+
+    void *aiming = aik.GetAiming(local, hitInfo); // Player.JGIEOGCGFEP
+    if (!aiming)
+        return false;
+
+    int baseDamage = aik.GetDamage(weapon);
+    if (baseDamage <= 0)
+        baseDamage = 99;
+    uint32_t weaponID = aik.GetWeaponID(weapon);
+
+    void *timeService = aik.TimeService();
+    if (!timeService)
+        return false;
+    void *msg = aik.MakeDamageMsg(local); // -> EBEDJLFHHHP
+    if (!msg)
+        return false;
+    void *checkParams = aik.CheckParams(weapon, aiming, headCollider, false, (void *)0);
+    if (!checkParams)
+        return false;
+
+    aik.StartFiring(local, weapon);
+
+    // EBEDJLFHHHP fields — same type order as the Android message struct:
+    // attacker/hp/zero/damage|part/victim/weapon/uniq/part/tick/...
+    uint32_t enemyId = aik.IdToU32(aik.GetPlayerID(target));
+    uint32_t localId = aik.IdToU32(aik.GetPlayerID(local));
+    *(uint32_t *)((uintptr_t)msg + 0x14) = enemyId;                              // NMGDAKFKJLH attacker id
+    *(uint16_t *)((uintptr_t)msg + 0x18) = (uint16_t)game_sdk->GetHp(target);    // GJCLHNBCABF hp
+    *(uint16_t *)((uintptr_t)msg + 0x1A) = 0;                                    // IMKLAILPLKC
+    *(uint32_t *)((uintptr_t)msg + 0x1C) = (uint32_t)baseDamage | (1u << 24);    // AEOHKCOACHD damage|part<<24
+    *(uint32_t *)((uintptr_t)msg + 0x20) = localId;                              // ECJBNJPOPIM local id
+    *(int32_t *)((uintptr_t)msg + 0x24) = (int32_t)weaponID;                     // NEGABPENICF weapon id
+    *(uint32_t *)((uintptr_t)msg + 0x28) = *(uint32_t *)((uintptr_t)weapon + 0x10); // NANKDHFLOFI uniq (IEFJGCGOMID.ODFDGMOCJLL)
+    *(uint8_t *)((uintptr_t)msg + 0x2C) = 1;                                     // PIIJBAFDLML part = head
+    *(uint32_t *)((uintptr_t)msg + 0x30) = *(uint32_t *)((uintptr_t)timeService + 0x20); // AMFEHGKDLOH simTick (TimeService.m_TickCount)
+    Vector3 hitPos;
+    if (!AikHeadPos(target, &hitPos))
+        hitPos = firePos;
+    *(void **)((uintptr_t)msg + 0x38) = aik.MakeVecMsg(firePos);                 // HOOMBLGOEPL firePos
+    *(void **)((uintptr_t)msg + 0x40) = aik.MakeVecMsg(hitPos);                  // KECMKGHBLDO hitPos
+    *(void **)((uintptr_t)msg + 0x48) = checkParams;                             // EEAJDJFLPMN CheckParametros
+    *(uint8_t *)((uintptr_t)msg + 0x62) = 0;                                     // FDJNCEIGHGB
+    *(uint8_t *)((uintptr_t)msg + 0x63) = 1;                                     // PJAOHJCJKLE
+    *(float *)((uintptr_t)msg + 0x70) = aik.Realtime();                          // KHBDOIKPPFI realtime
+    *(uint8_t *)((uintptr_t)msg + 0x74) = 0;                                     // ACJANANIPIM
+
+    aik.Send(106, msg, 2, 0); // opcode 106 = C2S_RUDP_TakeDamage_Req
+
+    aik.StopFire(local, weapon);
+    aik.ResetSwapTime(local); // opcode-108 Syns_SwapWeapon_Impl skipped (see header)
+    return true;
+}
+
+// AimkillRefreshAfterKill — re-arm weapon slots after a confirmed kill
+// (Android does SwapWeapon 1/2 + reset; the 108 sync is skipped)
+static void AikRefreshAfterKill(void *local)
+{
+    if (!local)
+        return;
+    aik.SwapWeapon(local, 1, false, (void *)0);
+    aik.SwapWeapon(local, 2, false, (void *)0);
+    aik.ResetSwapTime(local);
+}
+
+void RunAimKillSend()
+{
+    if (!Vars.AimKillSend)
+        return;
+    static bool busy = false; // re-entrancy guard (Android g_inAimkillSend)
+    if (busy)
+        return;
+    if (!AikInit())
+        return;
+
+    busy = true;
+    do
+    {
+        void *match = game_sdk->Curent_Match();
+        if (!match)
+            break;
+        void *local = game_sdk->GetLocalPlayer(match);
+        if (!local || game_sdk->get_MaxHP(local) <= 0 || game_sdk->get_IsDieing(local))
+            break; // lobby / dead: not a live player
+        void *weapon = aik.GetWeaponOnHand(local);
+        if (!weapon || !AikIsValidGun(weapon))
+            break;
+        void *hitInfo = *(void **)((uintptr_t)local + 0xE50); // Player.FDMIEDDNCEC -> CGKJLKPMGDJ
+        if (!hitInfo)
+            break;
+
+        Dictionary<uint8_t *, void **> *players =
+            *(Dictionary<uint8_t *, void **> **)((long)match + 0x148);
+        if (!players)
+            break;
+
+        Vector3 firePos;
+        if (!AikHeadPos(local, &firePos) || firePos == Vector3::zero())
+            break;
+
+        // candidates: alive, non-teammate, visible, in weapon range — scored
+        // by crosshair distance with the behind-camera z-check (Android order)
+        static const int kMaxT = 64;
+        void *cand[kMaxT];
+        float score[kMaxT];
+        int n = 0;
+        ImVec2 middle(ImGui::GetIO().DisplaySize.x * 0.5f,
+                      ImGui::GetIO().DisplaySize.y * 0.5f);
+        for (int u = 0; u < players->getSize() && n < kMaxT; u++)
+        {
+            void *p = players->getValues()[u];
+            if (!p || p == local)
+                continue;
+            if (!*(void **)p)
+                continue; // stale klass guard (Android)
+            if (game_sdk->get_IsDieing(p) || game_sdk->GetHp(p) <= 0)
+                continue;
+            if (aik.IsLocalTeammate(p))
+                continue;
+            if (!game_sdk->get_isVisible(p))
+                continue;
+            if (!AikInRange(local, p, weapon))
+                continue;
+            Vector3 head;
+            if (!AikHeadPos(p, &head))
+                continue;
+            bool inFront = false;
+            ImVec2 sp = Camera$$WorldToScreen::Checker(head, inFront);
+            float s;
+            if (inFront)
+            {
+                float dx = sp.x - middle.x;
+                float dy = sp.y - middle.y;
+                s = sqrtf(dx * dx + dy * dy);
+            }
+            else
+            {
+                s = 100000.0f + Vector3::Distance(firePos, head);
+            }
+            cand[n] = p;
+            score[n] = s;
+            n++;
+        }
+        if (n == 0)
+            break;
+
+        // sort by score (bubble — n <= 64, avoids any <algorithm> dependency)
+        for (int i = 0; i < n; i++)
+            for (int j = i + 1; j < n; j++)
+                if (score[j] < score[i])
+                {
+                    float ts = score[i]; score[i] = score[j]; score[j] = ts;
+                    void *tp = cand[i]; cand[i] = cand[j]; cand[j] = tp;
+                }
+
+        // pass A: up to 2 strikes, kill-aware (Android behaviour)
+        bool anyKilled = false;
+        int struck = 0;
+        for (int i = 0; i < n && struck < 2; i++)
+        {
+            void *t = cand[i];
+            int hpBefore = game_sdk->GetHp(t);
+            AikStrike(local, weapon, hitInfo, firePos, t);
+            int hpAfter = game_sdk->GetHp(t);
+            if (game_sdk->get_IsDieing(t) || hpAfter <= 0)
+                anyKilled = true;
+            else if (hpAfter < hpBefore - 1)
+                anyKilled = true;
+            struck++;
+        }
+        // pass B: every candidate gets its strike (Android double-hits the top 2)
+        for (int i = 0; i < n; i++)
+            AikStrike(local, weapon, hitInfo, firePos, cand[i]);
+
+        if (anyKilled)
+            AikRefreshAfterKill(local);
+    } while (0);
+    busy = false;
 }

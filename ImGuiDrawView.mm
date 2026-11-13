@@ -71,7 +71,7 @@ static UIWindow *SafeHostWindow(void)
 // screenshot: red label on top, white knob, cyan rounded border. Buttons are
 // ALWAYS visible (they never auto-hide); a plain tap toggles the option on
 // and off, dragging moves the button around. Bright = ON, dimmed = OFF.
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_COUNT = 3 };
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_COUNT = 4 };
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -417,6 +417,7 @@ ImFont* Urbanist;
             DrawFloatingButton(FLTBTN_TELEKILL, oxorany("Telekill"), &Vars.Telekill);
             DrawFloatingButton(FLTBTN_FLYV2, oxorany("Fly V2"), &Vars.Flyingtest);
             DrawFloatingButton(FLTBTN_RUNN, oxorany("Ninja Run"), &Vars.fly);
+            DrawFloatingButton(FLTBTN_AIMKILL, oxorany("SEND"), &Vars.AimKillSend);
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(365, 270), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
@@ -470,6 +471,8 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::Checkbox(oxorany("Button Telekill"), &Vars.Telekill);
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
+                        ImGui::Spacing();
+                        ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend);
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem(("INFO"))) {
@@ -492,6 +495,7 @@ ImFont* Urbanist;
             RunFly();
             RunFlyV2();
             RunTelekill();
+            RunAimKillSend();
             if (Vars.AimFov > 0) {
                 Vars.isAimFov = true;
             } else {
