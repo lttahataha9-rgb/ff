@@ -1227,8 +1227,6 @@ static void AikStoreHitHash(void *weapon, void *target, uint32_t tick)
     static void *(*GetHitHmac)() = nullptr;
     static void *(*HashCompute)(void *, void *) = nullptr;
     static int (*HashToInt)(void *, int) = nullptr;
-    static uint32_t (*IdToU32)(void *) = nullptr;
-    static void *(*GetPlayerID)(void *) = nullptr;
     if (st == 0)
     {
         CurrentGameModeSetting = (void *(*)())getRealOffset(oxo("0x59144D0")); // CurrentGameModeSetting
@@ -1236,10 +1234,8 @@ static void AikStoreHitHash(void *weapon, void *target, uint32_t tick)
         GetHitHmac = (void *(*)())getRealOffset(oxo("0x61C56A8"));              // KMLICIEHMHC.HAEEBMELLEG HMACSHA256
         HashCompute = (void *(*)(void *, void *))getRealOffset(oxo("0x8993C1C")); // HashAlgorithm.ComputeHash(byte[])
         HashToInt = (int (*)(void *, int))getRealOffset(oxo("0x8A92320"));     // BitConverter.ToInt32(byte[],0)
-        IdToU32 = aik.IdToU32;
-        GetPlayerID = aik.GetPlayerID;
         if (!CurrentGameModeSetting || !GetHitBytes || !GetHitHmac ||
-            !HashCompute || !HashToInt || !IdToU32 || !GetPlayerID)
+            !HashCompute || !HashToInt)
         {
             st = -1;
             return;
@@ -1259,7 +1255,7 @@ static void AikStoreHitHash(void *weapon, void *target, uint32_t tick)
     void *hmac = GetHitHmac();
     if (!hmac)
         return;
-    uint32_t seed = IdToU32(GetPlayerID(target));
+    uint32_t seed = aik.IdToU32(aik.GetPlayerID(target));
     // il2cpp64 Il2CppArray header = 32 bytes (0x20): obj 16 + bounds 8 + max_length 8
     // (Android 32-bit = 0x10 — nefs l'masdar: obj8+bounds4+len4)
     uint8_t *data = (uint8_t *)((uintptr_t)arr + 0x20);
@@ -1280,7 +1276,7 @@ static void AikShuffleValidate(void *weapon, void *params, uint32_t seedEnc)
 {
     static int st = 0; // 0 untried / 1 ok / -1 no API (fail-closed)
     static void *(*fDomGet)() = nullptr;
-    static void *(*fAsmList)(void *, size_t *) = nullptr;
+    static void **(*fAsmList)(void *, size_t *) = nullptr;
     static void *(*fAsmImg)(void *) = nullptr;
     static const char *(*fImgName)(void *) = nullptr;
     static void *(*fClsName)(void *, const char *, const char *) = nullptr;
@@ -1289,7 +1285,7 @@ static void AikShuffleValidate(void *weapon, void *params, uint32_t seedEnc)
     if (st == 0)
     {
         fDomGet = (void *(*)())dlsym(RTLD_DEFAULT, "il2cpp_domain_get");
-        fAsmList = (void *(*)(void *, size_t *))dlsym(RTLD_DEFAULT, "il2cpp_domain_get_assemblies");
+        fAsmList = (void **(*)(void *, size_t *))dlsym(RTLD_DEFAULT, "il2cpp_domain_get_assemblies");
         fAsmImg = (void *(*)(void *))dlsym(RTLD_DEFAULT, "il2cpp_assembly_get_image");
         fImgName = (const char *(*)(void *))dlsym(RTLD_DEFAULT, "il2cpp_image_get_name");
         fClsName = (void *(*)(void *, const char *, const char *))dlsym(RTLD_DEFAULT, "il2cpp_class_from_name");
