@@ -747,15 +747,14 @@ static void *GetInGameUIScene()
 
 void draw_watermark()
 {
-    // user: "mnin ndkhol l'wast ta3 l'3oba, l'fou9 dir MT x CHEAT"
-    // TOP-center, ghir f l'match (lobby → scene null → mkhbi)
-    if (!GetInGameUIScene())
-        return;
-    std::string claw = oxorany("MT x CHEAT");
+    // user (correction): "machi MT x CHEAT — LMT x CHEAT, w tkoun f blast
+    // dik [Penny]iOS (top-right, byna f l foto li sft lik), w tla3 mnin
+    // ndkhol l game [mnin dkholt l'app — lobby zada]"
+    std::string claw = oxorany("LMT x CHEAT");
     ImVec2 text_size = verdana_smol->calc_size(16, claw);
     ImVec2 text_pos(
-        (ImGui::GetIO().DisplaySize.x - text_size.x) * 0.5f, // TOP center (l'fou9)
-        10); // top margin
+        ImGui::GetIO().DisplaySize.x - text_size.x - 10.0f, // RIGHT (f blast dik RiOS)
+        44.0f); // kif blast "PennyiOS & EreenModz" f l foto
     AddText(verdana_smol, 16, false, false, text_pos + ImVec2(1, 1), ImColor(0, 0, 0, 150), claw);
     static float hue = 0.0f;
     hue += ImGui::GetIO().DeltaTime * 0.1f;
