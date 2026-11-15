@@ -503,7 +503,7 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest)) gFltShow[FLTBTN_FLYV2] = Vars.Flyingtest; // panel = sataf dyal l'button f écran
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
-                        ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st6=p ma zal Fight, st5=scene null
+                        ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st7=arc rise, st6=p ma zal Fight, st5=scene null
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button RUNN"), &Vars.fly)) gFltShow[FLTBTN_RUNN] = Vars.fly;
                         ImGui::SliderFloat(oxorany("Runn?"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
