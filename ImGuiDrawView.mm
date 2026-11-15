@@ -118,7 +118,7 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     // (border cyan, label 7amra, knob byd); ON → kolchi ybdel l'loun dyalha
     // (kFltOnCol) — user: "mnin ndire liha ON itbdel lounha".
     FltBtnState &b = gFltBtn[idx];
-    const float W = 80.0f, H = 74.0f;   // smaller: was 104x96 ("too big")
+    const float W = 50.0f, H = 46.0f;   // user exact: "50 46" (qbel 80x74 → 104x96)
     if (!b.inited) {
         b.inited = true;
         ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -129,8 +129,8 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(W, H), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
     const ImVec4 &oc = kFltOnCol[idx];
     const bool onPre = *v; // style pushed before Begin → 1-frame lag (ghir 16ms)
     ImGui::PushStyleColor(ImGuiCol_WindowBg, onPre
@@ -183,21 +183,28 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
 
-    // label: OFF = 7amra (look qdim), ON = loun dyal l'button
-    ImVec2 ts = ImGui::CalcTextSize(label);
+    // label: OFF = 7amra (look qdim), ON = loun dyal l'button — auto-fit font
+    // bach ma ykhrejch mn l'button sghir (50x46)
+    ImFont *fnt = ImGui::GetFont();
+    float fs = ImGui::GetFontSize();
+    ImVec2 ts = fnt->CalcTextSizeA(fs, FLT_MAX, 0.0f, label);
+    if (ts.x > W - 6.0f && fs > 9.0f)
+    {
+        fs = fs * (W - 6.0f) / ts.x;
+        ts = fnt->CalcTextSizeA(fs, FLT_MAX, 0.0f, label);
+    }
     ImU32 col32 = on ? IM_COL32((int)(oc.x * 255.0f), (int)(oc.y * 255.0f), (int)(oc.z * 255.0f), 255)
                      : IM_COL32(255, 64, 64, 255);
-    dl->AddText(ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 10.0f), col32, label);
+    dl->AddText(fnt, fs, ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 4.0f), col32, label);
 
-    // white knob SLIDES left (OFF) / right (ON), smoothly animated —
-    // only the knob moves, nothing else changes
-    const float margin = 8.0f, r = 15.0f;
+    // knob SLIDES left (OFF) / right (ON) — scaled l button sghir (50x46)
+    const float margin = 4.0f, r = 9.0f;
     float targetX = on ? (wp.x + W - margin - r) : (wp.x + margin + r);
     if (b.knobX <= 0.0f) b.knobX = targetX;              // first frame: snap
     float k = ImGui::GetIO().DeltaTime * 14.0f;          // smooth slide
     if (k > 1.0f) k = 1.0f;
     b.knobX += (targetX - b.knobX) * k;
-    dl->AddCircleFilled(ImVec2(b.knobX, wp.y + H * 0.63f), r,
+    dl->AddCircleFilled(ImVec2(b.knobX, wp.y + H * 0.66f), r,
                         on ? col32 : IM_COL32(245, 245, 245, 255), 36);
 
     gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));   // always tappable
