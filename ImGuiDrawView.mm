@@ -99,6 +99,22 @@ static bool FFPointOverFloating(CGPoint p)
     return false;
 }
 
+// Colored ON toggle (panel): mnin yweli ON → l'togel w smiyto ybdlo l'loun
+// (user: "wa7da l7mra, wa7da mauve, wa7da khadra") — OFF = loun default
+static bool ColorCheck(const char *label, bool *v, const ImVec4 &onCol)
+{
+    bool on = *v;
+    if (on)
+    {
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, onCol);
+        ImGui::PushStyleColor(ImGuiCol_Text, onCol);
+    }
+    bool changed = ImGui::Checkbox(label, v);
+    if (on)
+        ImGui::PopStyleColor(2);
+    return changed;
+}
+
 static void DrawFloatingButton(int idx, const char *label, bool *v)
 {
     // Always visible — never auto-hidden. The frame/label NEVER change
@@ -412,12 +428,9 @@ ImFont* Urbanist;
     CGFloat y = (menuSize.height - 260) / 2;
     disp.width = io.DisplaySize.x;   // was never set -> Arrow ESP bounds were wrong
     disp.height = io.DisplaySize.y;
-            // floating buttons BEFORE the menu so the menu (drawn later) stays
-            // on top — panel checkboxes keep winning the clicks on overlap
-            DrawFloatingButton(FLTBTN_TELEKILL, oxorany("Telekill"), &Vars.Telekill);
-            DrawFloatingButton(FLTBTN_FLYV2, oxorany("Fly V2"), &Vars.Flyingtest);
-            DrawFloatingButton(FLTBTN_RUNN, oxorany("Ninja Run"), &Vars.fly);
-            DrawFloatingButton(FLTBTN_AIMKILL, oxorany("SEND"), &Vars.AimKillSend);
+            // floating toggle buttons REMOVED (user: "machi m3a ndkhl ytelli3o
+            // l'boutonat — brit n'ctivi l'option f l'panel") → activation ghir
+            // men f l'panel, w l'touch = kolchi l'game (FFPointOverFloating = false)
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(365, 270), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
@@ -463,17 +476,17 @@ ImFont* Urbanist;
                     }
                     if (ImGui::BeginTabItem(("FEATURES"))) {
                         ImGui::Spacing();
-                        ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest);
+                        ColorCheck(oxorany("Button FLY V2"), &Vars.Flyingtest, ImVec4(1.00f, 0.25f, 0.25f, 1.0f)); // 7amra
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
                         ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st6=p ma zal Fight, st5=scene null
                         ImGui::Spacing();
-                        ImGui::Checkbox(oxorany("Button RUNN"), &Vars.fly);
+                        ColorCheck(oxorany("Button RUNN"), &Vars.fly, ImVec4(0.78f, 0.35f, 1.00f, 1.0f)); // mauve
                         ImGui::SliderFloat(oxorany("Runn?"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
                         ImGui::Spacing();
-                        ImGui::Checkbox(oxorany("Button Telekill"), &Vars.Telekill);
+                        ColorCheck(oxorany("Button Telekill"), &Vars.Telekill, ImVec4(0.78f, 0.35f, 1.00f, 1.0f)); // mauve
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
-                        ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend);
+                        ColorCheck(oxorany("AimKill Send"), &Vars.AimKillSend, ImVec4(0.25f, 1.00f, 0.45f, 1.0f)); // khadra
                         ImGui::Text("Aik: st:%d n:%d s:%d", aikDbgSt, aikDbgN, aikDbgSent); // st9=n mzyan, s>0=tsendat
                         ImGui::EndTabItem();
                     }
