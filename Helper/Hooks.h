@@ -738,13 +738,24 @@ void aimbot()
     ImVec2 EnemyLocation = Camera$$WorldToScreen::Regular(GetHeadPosition(playertarget));
     drawlineglow(draw_list, ImVec2(center.x, center.y), EnemyLocation, ImColor(255, 255, 255), 1, 3);
 }
+// GameFacade.CurrentInGameUIScene() = 0x5918DB4 — null f lobby/FE, non-null f l'match
+static void *GetInGameUIScene()
+{
+    static void *(*fn)() = (void *(*)())getRealOffset(oxo("0x5918DB4"));
+    return fn ? fn() : nullptr;
+}
+
 void draw_watermark()
 {
-    std::string claw = oxorany("4xCRYPTED");
+    // user: "mnin ndkhol l'wast ta3 l'3oba, l'fou9 dir MT x CHEAT"
+    // TOP-center, ghir f l'match (lobby → scene null → mkhbi)
+    if (!GetInGameUIScene())
+        return;
+    std::string claw = oxorany("MT x CHEAT");
     ImVec2 text_size = verdana_smol->calc_size(16, claw);
     ImVec2 text_pos(
-        10, // Left margin
-        ImGui::GetIO().DisplaySize.y - text_size.y - 10); // Bottom margin
+        (ImGui::GetIO().DisplaySize.x - text_size.x) * 0.5f, // TOP center (l'fou9)
+        10); // top margin
     AddText(verdana_smol, 16, false, false, text_pos + ImVec2(1, 1), ImColor(0, 0, 0, 150), claw);
     static float hue = 0.0f;
     hue += ImGui::GetIO().DeltaTime * 0.1f;
@@ -909,10 +920,9 @@ void RunFlyV2()
     //     island + tayara) / 1 Prepare / 2 FIGHT (= mora ma tnzel) / 3 Post...
     //     → teleport/pin GHIR f Fight — hazz l'mochkil "9bel ma tnzel kydini
     //     wst l map" w lobby zada (scene = null honak → st=5 fail-closed)
-    //     GameFacade.CurrentInGameUIScene() = 0x5918DB4 (static)
+    //     GameFacade.CurrentInGameUIScene() = 0x5918DB4 (static) — GetInGameUIScene()
     //     UIInGameScene.m_CSMatchPhase @ 0xD18
-    static void *(*InGameScene)() = (void *(*)())getRealOffset(oxo("0x5918DB4"));
-    void *scene = InGameScene ? InGameScene() : nullptr;
+    void *scene = GetInGameUIScene();
     if (!scene)
     {
         flyZSt = 5;
