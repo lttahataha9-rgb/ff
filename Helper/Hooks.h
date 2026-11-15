@@ -865,7 +865,13 @@ void RunFly()
 // ---- Fly V2: stay at the height you enabled it on (+ Fly Height) ----
 // FlyV2 teleport/pin state (debug UI line f FEATURES tab)
 static int flyZSt = 0;        // 0 off / 1 zone center / 2 SafeZone null / 3 ZoneDef null / 4 radius ghda2a (sky fallback)
+                             // 5 no in-game scene / 6 phase != Fight (spawn island/tayara = 9bel ma tnzel)
 static float flyZR = 0.0f;    // OuterRadius (debug)
+static int flyZPhase = 0;     // ECSMatchPhase raw (0 Waiting /1 Prepare /2 Fight /3 Post)
+// fallback anchor — l'blasa l'oula li khebbet fih l'teleport (machi pos kola
+// frame: kanta pos+flyhei KOLA FRAME = +300/frame = ROCKET infinite — "kytala3ni")
+static float flyAX = 0.0f, flyAY = 0.0f, flyAZ = 0.0f;
+static bool flyAnch = false;
 
 void RunFlyV2()
 {
@@ -877,6 +883,8 @@ void RunFlyV2()
         FlyalturaEXpose = nullptr;
         flyZSt = 0;
         flyZR = 0.0f;
+        flyZPhase = 0;
+        flyAnch = false;
         return;
     }
 
@@ -895,6 +903,28 @@ void RunFlyV2()
         return;
 
     Vector3 pos = game_sdk->get_position(tf);
+
+    // >>> PHASE GATE — Android pattern (ApplyRotationZone: csPhase != 2 → return;
+    //     AutoEnableTPOnPhase2): ECSMatchPhase (OHJMMEGFLLN): 0 Waiting (spawn
+    //     island + tayara) / 1 Prepare / 2 FIGHT (= mora ma tnzel) / 3 Post...
+    //     → teleport/pin GHIR f Fight — hazz l'mochkil "9bel ma tnzel kydini
+    //     wst l map" w lobby zada (scene = null honak → st=5 fail-closed)
+    //     GameFacade.CurrentInGameUIScene() = 0x5918DB4 (static)
+    //     UIInGameScene.m_CSMatchPhase @ 0xD18
+    static void *(*InGameScene)() = (void *(*)())getRealOffset(oxo("0x5918DB4"));
+    void *scene = InGameScene ? InGameScene() : nullptr;
+    if (!scene)
+    {
+        flyZSt = 5;
+        return;
+    }
+    uint32_t phase = *(uint32_t *)((uintptr_t)scene + oxo("0xD18"));
+    flyZPhase = (int)phase;
+    if (phase != 2) // Waiting/Prepare: spawn island, tayara, dive → ma kaytsenna TPs
+    {
+        flyZSt = 6;
+        return;
+    }
 
     // >>> FlyV2 v4: TELEPORT instant + PIN continuous (video ref: ground →
     //     instant SKY, senna sotra f l'jouj w ybqa kayqtel men l'fou9 = BOOYAH)
@@ -936,10 +966,18 @@ void RunFlyV2()
         }
         if (!gotZone)
         {
-            // fallback: sky 3la nefs l'X/Z — katchouf video: yteleporti l'jouj
-            target.x = pos.x;
-            target.y = pos.y + Vars.flyhei;
-            target.z = pos.z;
+            // fallback: sky 3la l'ANCHOR (l'blasa l'oula) — machi pos kola frame
+            // (pos+flyhei kola frame = +300/frame → rocket infinite = "kytala3ni")
+            if (!flyAnch)
+            {
+                flyAX = pos.x;
+                flyAY = pos.y;
+                flyAZ = pos.z;
+                flyAnch = true;
+            }
+            target.x = flyAX;
+            target.y = flyAY + Vars.flyhei;
+            target.z = flyAZ;
         }
         Transform_SetPosition(tf, target); // TELEPORT instant + PIN (continuous)
     }

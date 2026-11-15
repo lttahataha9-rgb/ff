@@ -465,7 +465,7 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest);
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
-                        ImGui::Text("Zone: %d r:%.0f", flyZSt, flyZR); // 1=TP dir / 2,3,4=zone null
+                        ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st6=p ma zal Fight, st5=scene null
                         ImGui::Spacing();
                         ImGui::Checkbox(oxorany("Button RUNN"), &Vars.fly);
                         ImGui::SliderFloat(oxorany("Runn?"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
