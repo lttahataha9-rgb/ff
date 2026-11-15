@@ -873,16 +873,18 @@ void RunFly()
     Transform_SetPosition(localTF, newPosition);
 }
 
-// ---- Fly V2: stay at the height you enabled it on (+ Fly Height) ----
-// FlyV2 teleport/pin state (debug UI line f FEATURES tab)
+// ---- Fly V2 — METHOD L9DIMA restored (user: "t'rja3 l'method l'9dima ta3o") ----
+// 1) TELEPORT we7da f l'activation → l'zone center f l'jouj (foug ruida)
+// 2) classic fly: pin ghir Y (exposeY + flyhei), X/Z = FREE (kaymchi 7er
+//    f sma) w slider Fly Height = y-tali3 / y-red ("yredni l'map f sma")
+// 3) snap-back: khrojt mn l'zone (|xz - zoneC| > radius) → y-ʕawd y-rddek
+//    l'zone f l'jouj ("ana bghit nb9a n-teleporta l'zone foug ruida")
+// FlyV2 state (debug UI line f FEATURES tab)
 static int flyZSt = 0;        // 0 off / 1 zone center / 2 SafeZone null / 3 ZoneDef null / 4 radius ghda2a (sky fallback)
                              // 5 no in-game scene / 6 phase != Fight (spawn island/tayara = 9bel ma tnzel)
 static float flyZR = 0.0f;    // OuterRadius (debug)
 static int flyZPhase = 0;     // ECSMatchPhase raw (0 Waiting /1 Prepare /2 Fight /3 Post)
-// fallback anchor — l'blasa l'oula li khebbet fih l'teleport (machi pos kola
-// frame: kanta pos+flyhei KOLA FRAME = +300/frame = ROCKET infinite — "kytala3ni")
-static float flyAX = 0.0f, flyAY = 0.0f, flyAZ = 0.0f;
-static bool flyAnch = false;
+static bool flyTPDone = false; // teleport we7da salat (on activation) — ba3dha = FREE hover
 
 void RunFlyV2()
 {
@@ -895,7 +897,7 @@ void RunFlyV2()
         flyZSt = 0;
         flyZR = 0.0f;
         flyZPhase = 0;
-        flyAnch = false;
+        flyTPDone = false; // activation jdida = teleport jdida l'zone
         return;
     }
 
@@ -936,22 +938,18 @@ void RunFlyV2()
         return;
     }
 
-    // >>> FlyV2 v4: TELEPORT instant + PIN continuous (video ref: ground →
-    //     instant SKY, senna sotra f l'jouj w ybqa kayqtel men l'fou9 = BOOYAH)
-    //     user: "yteleportini l centre dyal l'blasa l'amnina, ma kijerrenich"
-    //     - zone mawjouda → (zoneCenter X/Z) + flyhei Y = wast l'blasa l'amnina
-    //     - zone null    → sky 3la nefs l'X/Z (fallback, st=2/3/4)
-    //     PIN kol frame (continuous set) = gravity ma yhbetich, w zone li
-    //     kat9tar kat9elleb m3aha (center ytsarra f kol frame)
+    // >>> STEP 1 — TELEPORT we7da l'activation → l'zone f l'jouj (foug ruida)
+    //     video ref (dik tali3a lawla dyalek): ground → instant SKY → free f sma
     //     chain mn dump iOS (fail-closed, machi mn Android):
     //       match(JMAGGLCNGIG) + 0x210 = SafeZone
     //       SafeZone + 0xB8          = ZoneDefinition (BNINENNKABI)
     //       ZoneDefinition + 0x14    = OuterCenter (Vector3), + 0x20 = OuterRadius
+    if (!flyTPDone)
     {
         void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
         void *zoneDef = safeZone ? *(void **)((uintptr_t)safeZone + oxo("0xB8")) : nullptr;
         Vector3 target;
-        bool gotZone = false;
+        float anchorY;
         if (zoneDef)
         {
             Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
@@ -962,8 +960,61 @@ void RunFlyV2()
                 target.x = zoneC.x;
                 target.y = zoneC.y + Vars.flyhei;
                 target.z = zoneC.z;
-                flyZSt = 1; // zone center + sky altitude
-                gotZone = true;
+                anchorY = zoneC.y; // hover base = ground dyal l'zone
+                flyZSt = 1;
+            }
+            else
+            {
+                flyZSt = 4;
+                target.x = pos.x;
+                target.y = pos.y + Vars.flyhei;
+                target.z = pos.z;
+                anchorY = pos.y;
+            }
+        }
+        else
+        {
+            flyZSt = safeZone ? 3 : 2;
+            target.x = pos.x;
+            target.y = pos.y + Vars.flyhei;
+            target.z = pos.z;
+            anchorY = pos.y;
+        }
+        Transform_SetPosition(tf, target); // TELEPORT instant l'jouj
+        // METHOD L9DIMA anchor: hover base = l'blasa li wesselt lih
+        // (machi pos+flyhei KOLA FRAME = +300/frame = ROCKET "kytala3ni")
+        FlyalturaEXposeX = target.x;
+        FlyalturaEXposeY = anchorY;
+        FlyalturaEXposeZ = target.z;
+        FlyalturaEXpose = localPlayer;
+        flyTPDone = true;
+        return; // had l'frame: TP sallah — hover ybda mn l'frame jaya (pos jdida)
+    }
+
+    // >>> STEP 2 — ZONE SNAP-BACK ("nb9a n-teleporta l'zone foug ruida"):
+    //     free fly ghir DAKHL l'zone — ila khrojt mn OuterRadius (wla l'zone
+    //     kat9tar w katb3ed 3lik) → y-ʕawd y-rddek l'zone center f l'jouj
+    {
+        void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
+        void *zoneDef = safeZone ? *(void **)((uintptr_t)safeZone + oxo("0xB8")) : nullptr;
+        if (zoneDef)
+        {
+            Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
+            float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
+            flyZR = zoneR;
+            if (zoneR >= 10.0f)
+            {
+                flyZSt = 1;
+                float dx = pos.x - zoneC.x;
+                float dz = pos.z - zoneC.z;
+                if ((dx * dx + dz * dz) > zoneR * zoneR)
+                {
+                    FlyalturaEXposeX = zoneC.x;
+                    FlyalturaEXposeY = zoneC.y; // re-anchor 3la ground jdi dyal l'zone
+                    FlyalturaEXposeZ = zoneC.z;
+                    Transform_SetPosition(tf, Vector3(zoneC.x, zoneC.y + Vars.flyhei, zoneC.z));
+                    return;
+                }
             }
             else
             {
@@ -974,23 +1025,25 @@ void RunFlyV2()
         {
             flyZSt = safeZone ? 3 : 2;
         }
-        if (!gotZone)
-        {
-            // fallback: sky 3la l'ANCHOR (l'blasa l'oula) — machi pos kola frame
-            // (pos+flyhei kola frame = +300/frame → rocket infinite = "kytala3ni")
-            if (!flyAnch)
-            {
-                flyAX = pos.x;
-                flyAY = pos.y;
-                flyAZ = pos.z;
-                flyAnch = true;
-            }
-            target.x = flyAX;
-            target.y = flyAY + Vars.flyhei;
-            target.z = flyAZ;
-        }
-        Transform_SetPosition(tf, target); // TELEPORT instant + PIN (continuous)
     }
+
+    // >>> STEP 3 — METHOD L9DIMA (classic fly): pin ghir Y = exposeY + flyhei,
+    //     X/Z = pos dyalek daba = FREE — kaymchi 7er f sma, w l'slider
+    //     Fly Height (0-1000) = y-tali3 / y-red 3la l'map lli la3bin fiha
+    if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeY == 0.0f && FlyalturaEXposeZ == 0.0f) ||
+        FlyalturaEXpose == nullptr)
+    {
+        if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeZ == 0.0f) ||
+            FlyalturaEXpose == nullptr)
+        {
+            FlyalturaEXposeX = pos.x;
+            FlyalturaEXposeZ = pos.z;
+            FlyalturaEXpose = localPlayer;
+        }
+        FlyalturaEXposeY = pos.y;
+    }
+
+    Transform_SetPosition(tf, Vector3(pos.x, FlyalturaEXposeY + Vars.flyhei, pos.z));
 }
 
 // ---- closest alive enemy (used by Telekill) ----
