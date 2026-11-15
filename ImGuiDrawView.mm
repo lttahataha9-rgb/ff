@@ -67,11 +67,15 @@ static UIWindow *SafeHostWindow(void)
 }
 
 // ===================== floating feature buttons =====================
-// Quick-toggle buttons over the game, styled like the cyan toggle from the
-// screenshot: red label on top, white knob, cyan rounded border. Buttons are
-// ALWAYS visible (they never auto-hide); a plain tap toggles the option on
-// and off, dragging moves the button around. Bright = ON, dimmed = OFF.
+// Quick-toggle buttons over the game. VISIBILITY: ghir li n-active-hom f
+// l'panel (gFltShow — user: "mnin n'active hadi → tla3 lya l'boutonat f
+// l'écran"). A plain tap toggles the option on and off, dragging moves the
+// button around. COLOR: OFF = look qdim (cyan border, 7amra label, byd knob);
+// ON → lounha ybdel (Fly=7amra, Runn/Telekill=mauve, Send=khadra — user:
+// "mnin ndire liha ON itbdel lounha"). Panel = plain checkbox (machi hada
+// li brit itbdel lounha).
 enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_COUNT = 4 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -99,27 +103,20 @@ static bool FFPointOverFloating(CGPoint p)
     return false;
 }
 
-// Colored ON toggle (panel): mnin yweli ON → l'togel w smiyto ybdlo l'loun
-// (user: "wa7da l7mra, wa7da mauve, wa7da khadra") — OFF = loun default
-static bool ColorCheck(const char *label, bool *v, const ImVec4 &onCol)
-{
-    bool on = *v;
-    if (on)
-    {
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, onCol);
-        ImGui::PushStyleColor(ImGuiCol_Text, onCol);
-    }
-    bool changed = ImGui::Checkbox(label, v);
-    if (on)
-        ImGui::PopStyleColor(2);
-    return changed;
-}
+// ON colors dyal l'floating buttons (user: "wa7da l7mra, wa7da mauve,
+// wa7da khadra") — t-tbdlo ghir mnin l'button yweli ON
+static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
+    ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // TELEKILL — mauve
+    ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYV2    — 7amra
+    ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // RUNN     — mauve
+    ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  — khadra
+};
 
 static void DrawFloatingButton(int idx, const char *label, bool *v)
 {
-    // Always visible — never auto-hidden. The frame/label NEVER change
-    // color (the screenshot look stays fixed); the only state indicator
-    // is the white knob sliding left (OFF) / right (ON).
+    // Visible ghir mnin n-active-ha f l'panel (gFltShow). OFF = look qdim
+    // (border cyan, label 7amra, knob byd); ON → kolchi ybdel l'loun dyalha
+    // (kFltOnCol) — user: "mnin ndire liha ON itbdel lounha".
     FltBtnState &b = gFltBtn[idx];
     const float W = 80.0f, H = 74.0f;   // smaller: was 104x96 ("too big")
     if (!b.inited) {
@@ -128,14 +125,18 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
         b.pos = ImVec2(ds.x - W - 12.0f, 64.0f + idx * (H + 12.0f));   // higher up
     }
 
-    // fixed look — the frame NEVER changes color (state = knob position only)
+    // window look: OFF = qdim (cyan), ON = loun dyalha (bg/border — onPre)
     ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(W, H), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.07f, 0.10f, 0.62f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.31f, 0.90f, 1.00f, 1.00f));
+    const ImVec4 &oc = kFltOnCol[idx];
+    const bool onPre = *v; // style pushed before Begin → 1-frame lag (ghir 16ms)
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, onPre
+        ? ImVec4(0.05f + oc.x * 0.10f, 0.07f + oc.y * 0.10f, 0.10f + oc.z * 0.10f, 0.72f)
+        : ImVec4(0.05f, 0.07f, 0.10f, 0.62f));
+    ImGui::PushStyleColor(ImGuiCol_Border, onPre ? oc : ImVec4(0.31f, 0.90f, 1.00f, 1.00f));
 
     char wname[48];
     snprintf(wname, sizeof(wname), "##fltwin%d", idx);
@@ -182,10 +183,11 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
 
-    // label always red — the frame keeps the screenshot look at all times
+    // label: OFF = 7amra (look qdim), ON = loun dyal l'button
     ImVec2 ts = ImGui::CalcTextSize(label);
-    dl->AddText(ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 10.0f),
-                IM_COL32(255, 64, 64, 255), label);
+    ImU32 col32 = on ? IM_COL32((int)(oc.x * 255.0f), (int)(oc.y * 255.0f), (int)(oc.z * 255.0f), 255)
+                     : IM_COL32(255, 64, 64, 255);
+    dl->AddText(ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 10.0f), col32, label);
 
     // white knob SLIDES left (OFF) / right (ON), smoothly animated —
     // only the knob moves, nothing else changes
@@ -196,7 +198,7 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     if (k > 1.0f) k = 1.0f;
     b.knobX += (targetX - b.knobX) * k;
     dl->AddCircleFilled(ImVec2(b.knobX, wp.y + H * 0.63f), r,
-                        IM_COL32(245, 245, 245, 255), 36);
+                        on ? col32 : IM_COL32(245, 245, 245, 255), 36);
 
     gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));   // always tappable
 
@@ -428,9 +430,32 @@ ImFont* Urbanist;
     CGFloat y = (menuSize.height - 260) / 2;
     disp.width = io.DisplaySize.x;   // was never set -> Arrow ESP bounds were wrong
     disp.height = io.DisplaySize.y;
-            // floating toggle buttons REMOVED (user: "machi m3a ndkhl ytelli3o
-            // l'boutonat — brit n'ctivi l'option f l'panel") → activation ghir
-            // men f l'panel, w l'touch = kolchi l'game (FFPointOverFloating = false)
+            // floating buttons: GHIR li n-active-hom f l'panel (gFltShow —
+            // user: "mnin n'active hadi → tla3 lya l'boutonat f l'écran");
+            // hidden → rect mrqyad = tap kolchi l l'game
+            for (int i = 0; i < FLTBTN_COUNT; i++)
+            {
+                if (!gFltShow[i])
+                {
+                    gFltBtnRect[i] = ImRect(0, 0, 0, 0); // ma kaykheddmich
+                    continue;
+                }
+                switch (i)
+                {
+                case FLTBTN_TELEKILL:
+                    DrawFloatingButton(i, oxorany("Telekill"), &Vars.Telekill);
+                    break;
+                case FLTBTN_FLYV2:
+                    DrawFloatingButton(i, oxorany("Fly V2"), &Vars.Flyingtest);
+                    break;
+                case FLTBTN_RUNN:
+                    DrawFloatingButton(i, oxorany("Runn"), &Vars.fly);
+                    break;
+                case FLTBTN_AIMKILL:
+                    DrawFloatingButton(i, oxorany("Send"), &Vars.AimKillSend);
+                    break;
+                }
+            }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(365, 270), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
@@ -476,17 +501,17 @@ ImFont* Urbanist;
                     }
                     if (ImGui::BeginTabItem(("FEATURES"))) {
                         ImGui::Spacing();
-                        ColorCheck(oxorany("Button FLY V2"), &Vars.Flyingtest, ImVec4(1.00f, 0.25f, 0.25f, 1.0f)); // 7amra
+                        if (ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest)) gFltShow[FLTBTN_FLYV2] = Vars.Flyingtest; // panel = sataf dyal l'button f écran
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
                         ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st6=p ma zal Fight, st5=scene null
                         ImGui::Spacing();
-                        ColorCheck(oxorany("Button RUNN"), &Vars.fly, ImVec4(0.78f, 0.35f, 1.00f, 1.0f)); // mauve
+                        if (ImGui::Checkbox(oxorany("Button RUNN"), &Vars.fly)) gFltShow[FLTBTN_RUNN] = Vars.fly;
                         ImGui::SliderFloat(oxorany("Runn?"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
                         ImGui::Spacing();
-                        ColorCheck(oxorany("Button Telekill"), &Vars.Telekill, ImVec4(0.78f, 0.35f, 1.00f, 1.0f)); // mauve
+                        if (ImGui::Checkbox(oxorany("Button Telekill"), &Vars.Telekill)) gFltShow[FLTBTN_TELEKILL] = Vars.Telekill;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
-                        ColorCheck(oxorany("AimKill Send"), &Vars.AimKillSend, ImVec4(0.25f, 1.00f, 0.45f, 1.0f)); // khadra
+                        if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
                         ImGui::Text("Aik: st:%d n:%d s:%d", aikDbgSt, aikDbgN, aikDbgSent); // st9=n mzyan, s>0=tsendat
                         ImGui::EndTabItem();
                     }
