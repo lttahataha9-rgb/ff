@@ -872,25 +872,20 @@ void RunFly()
     Transform_SetPosition(localTF, newPosition);
 }
 
-// ---- Fly V2 — ARC "f blast wahd" + METHOD L9DIMA (user: "y-teli3ni w
-//     y-radni l'wast l'map l'amnina li la3bin fiha" + answered "Direct arc"
-//     + video IMG_0059 "BRITO FHAL HAKA") ----
-// 1) ARC: beat1 = y-teli3ni 0.25s mn blasti (st=7) → beat2 = y-radni f wast
-//    l'zone f l'jouj (st=1); zone null → settle f blasti (st=2/3/4)
+// ---- Fly V2 - BLAST WAHD DIRECT + METHOD L9DIMA (user: "fixi l'sky
+//     teleport... brito kima gelt lik... ydini wast l map l'amnina" +
+//     answered "Blast wahd direct + bla snap-back") ----
+// 1) blast: 3la dor FlyV2 -> teleport WA7D instant f wast l'zone l'amna
+//    f l'jouj (st=1); zone null/ghda2a -> settle f blasti (st=2/3/4)
+//    - bla rise-then-drop (2 jumps), bla snap-back ("ma bghit auto")
 // 2) classic fly: pin ghir Y (exposeY + flyhei), X/Z = FREE (kaymchi 7er
 //    f sma) w slider Fly Height = y-tali3 / y-red ("yredni l'map f sma")
-// 3) snap-back: khrojt mn l'zone (|xz - zoneC| > radius) → y-ʕawd y-rddek
-//    l'zone f l'jouj ("ana bghit nb9a n-teleporta l'zone foug ruida")
 // FlyV2 state (debug UI line f FEATURES tab)
 static int flyZSt = 0;        // 0 off / 1 zone center / 2 SafeZone null / 3 ZoneDef null / 4 radius ghda2a (sky fallback)
-                             // 5 no in-game scene / 6 phase != Fight / 7 arc rise (beat 1)
+                             // 5 no in-game scene / 6 phase != Fight
 static float flyZR = 0.0f;    // OuterRadius (debug)
 static int flyZPhase = 0;     // ECSMatchPhase raw (0 Waiting /1 Prepare /2 Fight /3 Post)
-static bool flyTPDone = false; // beat 1 (rise) sal — ba3dha beat 2 → FREE hover
-static int flyArcPhase = 0;   // 0 ba3d / 1 rising (beat 1) / 2 wassel l'zone
-static float flyArcT = 0.0f;  // wa9t baqi f l'rise
-static float flyRiseX = 0.0f, flyRiseY = 0.0f, flyRiseZ = 0.0f; // pin dyal l'rise
-static float flyArcG = 0.0f;  // Y dyal l'ard 9bel l'tali3a (fallback anchor)
+static bool flyTPDone = false; // blast wahd sal — ba3dha = FREE hover (bla snap-back)
 
 void RunFlyV2()
 {
@@ -903,9 +898,7 @@ void RunFlyV2()
         flyZSt = 0;
         flyZR = 0.0f;
         flyZPhase = 0;
-        flyTPDone = false; // activation jdida = ARC jdida (beat1 → beat2)
-        flyArcPhase = 0;
-        flyArcT = 0.0f;
+        flyTPDone = false; // activation jdida = blast jdide (wa7d l'wast zone)
         return;
     }
 
@@ -946,38 +939,18 @@ void RunFlyV2()
         return;
     }
 
-    // >>> ARC "f blast wahd" (user: "ana bghito y-teli3ni w y-radni l'wast
-    //     l'map l'amnina" + answered Direct arc + video IMG_0059 "fhal haka"):
-    //     BEAT 1 — y-teli3ni: 0.25s f l'jouj blasti (st=7)
-    //     BEAT 2 — y-radni f wast l'zone f l'jouj (st=1); zone null → settle
-    //     f blasti (st=2/3/4); ba3dha = STEP 2/3 (snap-back + free fly)
-    //     chain mn dump iOS (fail-closed, machi mn Android):
-    //       match(JMAGGLCNGIG) + 0x210 = SafeZone
-    //       SafeZone + 0xB8          = ZoneDefinition (BNINENNKABI)
-    //       ZoneDefinition + 0x14    = OuterCenter (Vector3), + 0x20 = OuterRadius
-    if (!flyTPDone) // BEAT 1 — RISE (y-teli3ni mn blasti)
+    // >>> BLAST WAHD DIRECT (user: "fixi l'sky teleport... brito kima gelt
+    //     lik... ydini wast l map l'amnina" + answered "Blast wahd direct +
+    //     bla snap-back"): 3la dor FlyV2 → teleport WA7D instant f wast
+    //     l'zone l'amna (f l'jouj), bla rise-then-drop (2 jumps = glitch),
+    //     w ba3dha ghir free fly — bla y-rddekni automatic (snap-back TM7).
+    //     zone null/ghda2a → settle f blasti (fail-closed, st=2/3/4).
+    //     chain dump-verified (iOS dump.cs):
+    //       match(JMAGGLCNGIG) + 0x210 = SafeZone OBCJNEDKDOC
+    //       SafeZone + 0xB8          = ZoneDefinition BNINENNKABI
+    //       ZoneDefinition + 0x14    = OuterCenter (Vector3), +0x20 = OuterRadius
+    if (!flyTPDone) // BLAST WAHD — teleport instant l'wast l'zone (st=1)
     {
-        flyArcG = pos.y;
-        flyRiseX = pos.x;
-        flyRiseY = pos.y + Vars.flyhei + 200.0f;
-        flyRiseZ = pos.z;
-        Transform_SetPosition(tf, Vector3(flyRiseX, flyRiseY, flyRiseZ));
-        flyZSt = 7;
-        flyTPDone = true;
-        flyArcPhase = 1;
-        flyArcT = 0.25f;
-        return;
-    }
-    if (flyArcPhase == 1) // BEAT 1 pin f l'jouj → mora 0.25s → l'zone
-    {
-        Transform_SetPosition(tf, Vector3(flyRiseX, flyRiseY, flyRiseZ));
-        float dt = ImGui::GetIO().DeltaTime;
-        if (dt > 0.1f)
-            dt = 0.1f;
-        flyArcT -= dt;
-        if (flyArcT > 0.0f)
-            return;
-        // BEAT 2 — DROP f wast l'map l'amnina (y-radni)
         void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
         void *zoneDef = safeZone ? *(void **)((uintptr_t)safeZone + oxo("0xB8")) : nullptr;
         Vector3 target;
@@ -998,60 +971,40 @@ void RunFlyV2()
             else
             {
                 flyZSt = 4;
-                target.x = flyRiseX;
-                target.y = flyArcG + Vars.flyhei;
-                target.z = flyRiseZ;
-                anchorY = flyArcG;
+                target.x = pos.x;
+                target.y = pos.y + Vars.flyhei;
+                target.z = pos.z;
+                anchorY = pos.y;
             }
         }
         else
         {
             flyZSt = safeZone ? 3 : 2;
-            target.x = flyRiseX;
-            target.y = flyArcG + Vars.flyhei;
-            target.z = flyRiseZ;
-            anchorY = flyArcG;
+            target.x = pos.x;
+            target.y = pos.y + Vars.flyhei;
+            target.z = pos.z;
+            anchorY = pos.y;
         }
-        Transform_SetPosition(tf, target); // y-radni f wast l'zone (f l'jouj)
+        Transform_SetPosition(tf, target); // BLAST WAHD — nafs l'wa7d, bla 2 jumps
         // METHOD L9DIMA anchor: hover base = l'blasa li wesselt lih
         // (machi pos+flyhei KOLA FRAME = +300/frame = ROCKET "kytala3ni")
         FlyalturaEXposeX = target.x;
         FlyalturaEXposeY = anchorY;
         FlyalturaEXposeZ = target.z;
         FlyalturaEXpose = localPlayer;
-        flyArcPhase = 2;
-        return; // ba3dha: STEP 2 snap-back + STEP 3 free fly (method l'9dima)
+        flyTPDone = true;
+        return; // ba3dha: STEP 3 free fly (bla snap-back — "ma bghit auto")
     }
 
-    // >>> STEP 2 — ZONE SNAP-BACK ("nb9a n-teleporta l'zone foug ruida"):
-    //     free fly ghir DAKHL l'zone — ila khrojt mn OuterRadius (wla l'zone
-    //     kat9tar w katb3ed 3lik) → y-ʕawd y-rddek l'zone center f l'jouj
+    // >>> TELEMETRY ONLY — kay-update st/r dyal l'panel kola frame w ma
+    //     y-9elleb 3la l'position (snap-back TM7 — user: "ma bghit auto")
     {
         void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
         void *zoneDef = safeZone ? *(void **)((uintptr_t)safeZone + oxo("0xB8")) : nullptr;
         if (zoneDef)
         {
-            Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
-            float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
-            flyZR = zoneR;
-            if (zoneR >= 10.0f)
-            {
-                flyZSt = 1;
-                float dx = pos.x - zoneC.x;
-                float dz = pos.z - zoneC.z;
-                if ((dx * dx + dz * dz) > zoneR * zoneR)
-                {
-                    FlyalturaEXposeX = zoneC.x;
-                    FlyalturaEXposeY = zoneC.y; // re-anchor 3la ground jdi dyal l'zone
-                    FlyalturaEXposeZ = zoneC.z;
-                    Transform_SetPosition(tf, Vector3(zoneC.x, zoneC.y + Vars.flyhei, zoneC.z));
-                    return;
-                }
-            }
-            else
-            {
-                flyZSt = 4;
-            }
+            flyZR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
+            flyZSt = (flyZR >= 10.0f) ? 1 : 4;
         }
         else
         {
