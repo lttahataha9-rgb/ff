@@ -519,7 +519,7 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
-                        ImGui::Text("Aik: st:%d n:%d s:%d", aikDbgSt, aikDbgN, aikDbgSent); // st9=n mzyan, s>0=tsendat
+                        ImGui::Text("Aik: st:%d n:%d s:%d", aikDbgSt, aikDbgN, aikDbgSent); // st9=sent, s>0=packets (zexisyy st1-12)
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem(("INFO"))) {
@@ -542,7 +542,15 @@ ImFont* Urbanist;
             RunFly();
             RunFlyV2();
             RunTelekill();
-            RunAimKillSend();
+            StartAimkill();
+            // zexisyy: msg 108 (reload) — same frame as Aimkill, after local+enemy
+            {
+                void *aikM108 = game_sdk->Curent_Match();
+                void *aikL108 = aikM108 ? game_sdk->GetLocalPlayer(aikM108) : nullptr;
+                void *aikE108 = GetClosestEnemy();
+                if (Vars.AimKillSend && aikL108 && aikE108)
+                    Send108(aikL108, aikE108);
+            }
             if (Vars.AimFov > 0) {
                 Vars.isAimFov = true;
             } else {

@@ -1325,9 +1325,11 @@ static bool AikInRange(void *local, void *enemy, void *weapon)
 }
 
 // --- AimKill Send v2 (gaps from Android port) --------------------------------
-// Telemetry: st = last RunAimKillSend gate (1 init / 2 no-match / 3 not-live /
-// 4 no-gun / 5 no-hitInfo / 6 no-players / 7 no-firePos / 8 no-cands / 9 ran),
-// n = candidate count, s = packets sent. Shown in the FEATURES tab.
+// Telemetry: st = last StartAimkill gate (1 ran / 2 no-match / 3 not-live /
+// 4 no-enemy / 5 enemy-fail / 6 no-gun / 7 bad-gun / 8 range / 9 SENT /
+// 10 no-pool-collider / 11 no-checkParams / 12 no-packet),
+// n = 1 when a target is acquired, s = packets sent (zexisyy port).
+// Shown in the FEATURES tab.
 static int aikDbgSt = 0, aikDbgN = 0, aikDbgSent = 0;
 
 static bool aikStrEq(const char *a, const char *b)
@@ -1549,143 +1551,386 @@ static void AikRefreshAfterKill(void *local)
     aik.ResetSwapTime(local);
 }
 
-void RunAimKillSend()
-{
-    if (!Vars.AimKillSend)
-        return;
-    static bool busy = false; // re-entrancy guard (Android g_inAimkillSend)
-    if (busy)
-        return;
-    if (!AikInit())
-    {
-        aikDbgSt = 1;
+// =============================================================================
+// zexisyy (c) 2026 — StartAimkill (message 106) + Send108 (message 108)
+// NOTICE (verbatim): "This is the main Aimkill Send used by everyone. The same
+// code runs on iOS and Android. The offsets here match the current dump. For
+// another build, or for Android, replace only the offsets from your dump.
+// Do not rewrite the function."
+// Spot-checked against ffdump/dump.cs: every RVA below exists in this dump and
+// class EOBFCLNNIJH (namespace "message") has fields +0x14/+0x18 with ctor
+// 0x277189C. Fail-closed: nothing here is guessed for other builds.
+// Adaptations only (no logic changes): Vars.AimKillSend = their AimKill,
+// aikDbgSt/aikDbgN/aikDbgSent lines for the FEATURES panel, g_dmg99 as a
+// local static cache (their project global), and UnitySym/FindGameClass
+// implemented over dlsym(RTLD_DEFAULT) — same il2cpp chain as AikShuffleValidate.
+// =============================================================================
+#include "Monostring.h" // monoList<T> — TakeDamage_Req_o2::CheckParams field
+
+// ---- offsets: StartAimkill (zexisyy part 1, verbatim) ----
+#define OFF_Zexis_TakeDamageMsgId                 106
+#define OFF_Zexis_GameFacade_Send                 0x5926D78
+#define OFF_Zexis_GetWeaponOnHand                 0x5616118
+#define OFF_Zexis_GetItemDataID                   0x5B0B8EC
+#define OFF_Zexis_Weapon_Field5F0                 0x5F0
+#define OFF_Zexis_Weapon_BaseDamageField          0xA8
+#define OFF_Zexis_Weapon_UniqueNetID              0x10
+#define OFF_Zexis_Weapon_Range                    0x5BED0A8
+#define OFF_Zexis_Player_ObjectPool               0xE50
+#define OFF_Zexis_Player_PlayerID                 0x408
+#define OFF_Zexis_Player_Attributes               0x768
+#define OFF_Zexis_Player_DamageModule             0x318
+#define OFF_Zexis_Player_DamageInfo               0x10
+#define OFF_Zexis_Player_AimTarget                0x738
+#define OFF_Zexis_DamageInfo_DamageValue          0x10
+#define OFF_Zexis_DamageInfo_HitPart              0x14
+#define OFF_Zexis_DamageInfo_AttackerID           0x28
+#define OFF_Zexis_DamageInfo_Weapon               0x40
+#define OFF_Zexis_Pool_HitGameObject              0x18
+#define OFF_Zexis_Pool_HitCollider                0x20
+#define OFF_Zexis_Pool_HitLocation                0x28
+#define OFF_Zexis_Pool_RayDir                     0x34
+#define OFF_Zexis_Pool_RayDir2                    0x40
+#define OFF_Zexis_Pool_StartPos                   0x4C
+#define OFF_Zexis_Pool_Damage                     0x58
+#define OFF_Zexis_Pool_Distance                   0x5C
+#define OFF_Zexis_Pool_Flags60                    0x60
+#define OFF_Zexis_Pool_Flags64                    0x64
+#define OFF_Zexis_Pool_Flag70                     0x70
+#define OFF_Zexis_Pool_Flag71                     0x71
+#define OFF_Zexis_GetHeadCollider                 0x5634F3C
+#define OFF_Zexis_GetGameObject                   0x8D59C7C
+#define OFF_Zexis_GetAimingEntity                 0x56A7F5C
+#define OFF_Zexis_BuildCheckParams                0x5C262DC
+#define OFF_Zexis_WeaponDoSomething               0x5C2B3F0
+#define OFF_Zexis_StartFiring                     0x5A5B868
+#define OFF_Zexis_StopFire                        0x5A5C464
+#define OFF_Zexis_CurrentGameSimulationTimer      0x5919E58
+#define OFF_Zexis_SimTimer_TickCount              0x20
+#define OFF_Zexis_CreateDamageReq                 0x607E1DC
+#define OFF_Zexis_GetPlayerID                     0x55FE154
+#define OFF_Zexis_PlayerIDToUint                  0x649046C
+#define OFF_Zexis_PackVector3                     0x3715AC4
+#define OFF_Zexis_RealtimeSinceStartup            0x8D667EC
+
+// ---- offsets: Send108 (zexisyy part 2) — the rest duplicate part 1 above ----
+#define OFF_Zexis_ReloadMsgId                     108
+#define OFF_Zexis_Msg108_Ctor                     0x277189C   /* void message_EOBFCLNNIJH__ctor(void *self) */
+#define OFF_Zexis_Msg108_Id                       0x14        /* uint32_t PlayerID */
+#define OFF_Zexis_Msg108_Unique                   0x18        /* uint32_t WeaponUniqueID */
+
+// ---- packet structs (zexisyy verbatim; our Vector3 from Vector3.h instead) ----
+struct COW_GamePlay_IHAAMHPPLMG_o {
+    uint32_t m_Value;
+    uint32_t m_ID;
+    uint8_t  m_TeamID;
+    uint8_t  m_ShortID;
+    uint64_t m_IDMask;
+};
+
+struct message_PVector3IntPos_o {
+    void *klass;
+    void *monitor;
+    bool UDPClientMessageBase_m_GetFromPool;
+    int32_t X;
+    int32_t Y;
+    int32_t Z;
+};
+
+struct message_C2S_RUDP_TakeDamage_Req_o2 {
+    void *klass;
+    void *monitor;
+    bool UDPClientMessageBase_m_GetFromPool;
+    uint32_t AttackableEntityID;
+    uint16_t RealDamageValue;
+    uint16_t ShieldDamageValue;
+    uint32_t DamageValue;
+    uint32_t DamagerID;
+    int32_t  WeaponDataID;
+    uint32_t WeaponUniqueID;
+    uint8_t  HitBodyPart;
+    uint32_t TickCount;
+    message_PVector3IntPos_o *FirePos;
+    message_PVector3IntPos_o *TargetPos;
+    monoList<float *> *CheckParams;
+    uint32_t ExtraData;
+    float ArmorRatio;
+    uint64_t ExtraFlag;
+    int8_t SpecialHitType;
+    bool ForceNoHeadShot;
+    bool IsPlayerBackArea;
+    monoList<int *> *DamageData;
+    float BaseTime;
+    bool ManualReload;
+};
+
+struct message_EOBFCLNNIJH_o {
+    void *klass;
+    void *monitor;
+    bool UDPClientMessageBase_m_GetFromPool;
+    uint32_t PlayerID;          /* +0x14 */
+    uint32_t WeaponUniqueID;    /* +0x18 */
+};
+
+// ---- il2cpp declarations (zexisyy part 2 verbatim) ----
+typedef void *(*il2cpp_domain_get_t)();
+typedef void **(*il2cpp_domain_get_assemblies_t)(void *domain, size_t *size);
+typedef void *(*il2cpp_assembly_get_image_t)(void *assembly);
+typedef const char *(*il2cpp_image_get_name_t)(void *image);
+typedef void *(*il2cpp_class_from_name_t)(void *image, const char *nameSpace, const char *name);
+typedef void *(*il2cpp_object_new_t)(void *klass);
+
+typedef bool (*GameFacade_Send_t)(uint32_t messageID, void *msg, uint8_t sendOption, bool cacheMsgAnyWay);
+typedef void (*Msg108_Ctor_t)(void *self);
+typedef void *(*GetWeaponOnHand_t)(void *player);
+typedef int (*GetItemDataID_t)(void *weapon);
+typedef COW_GamePlay_IHAAMHPPLMG_o (*GetPlayerID_t)(void *player);
+typedef uint32_t (*PlayerIDToUint_t)(COW_GamePlay_IHAAMHPPLMG_o id);
+
+// UnitySym / FindGameClass — zexisyy il2cpp_api.h behavior, portable body:
+// resolve il2cpp symbols from the already-loaded UnityFramework image via
+// dlsym(RTLD_DEFAULT) (same chain AikShuffleValidate already uses). Fail-closed.
+static void *UnitySym(const char *name) {
+    return (void *)dlsym(RTLD_DEFAULT, name);
+}
+
+static void *FindGameClass(const char *nameSpace, const char *name) {
+    static il2cpp_domain_get_t fDomGet = nullptr;
+    static il2cpp_domain_get_assemblies_t fDomAsm = nullptr;
+    static il2cpp_assembly_get_image_t fAsmImg = nullptr;
+    static il2cpp_class_from_name_t fClsName = nullptr;
+    static bool fTried = false;
+    if (!fTried) {
+        fTried = true;
+        fDomGet = (il2cpp_domain_get_t)dlsym(RTLD_DEFAULT, "il2cpp_domain_get");
+        fDomAsm = (il2cpp_domain_get_assemblies_t)dlsym(RTLD_DEFAULT, "il2cpp_domain_get_assemblies");
+        fAsmImg = (il2cpp_assembly_get_image_t)dlsym(RTLD_DEFAULT, "il2cpp_assembly_get_image");
+        fClsName = (il2cpp_class_from_name_t)dlsym(RTLD_DEFAULT, "il2cpp_class_from_name");
+    }
+    if (!fDomGet || !fDomAsm || !fAsmImg || !fClsName) return nullptr;
+    void *domain = fDomGet();
+    if (!domain) return nullptr;
+    size_t n = 0;
+    void **assemblies = fDomAsm(domain, &n);
+    if (!assemblies) return nullptr;
+    for (size_t i = 0; i < n; i++) {
+        if (!assemblies[i]) continue;
+        void *image = fAsmImg(assemblies[i]);
+        if (!image) continue;
+        void *klass = fClsName(image, nameSpace, name);
+        if (klass) return klass;
+    }
+    return nullptr;
+}
+
+// zexisyy keeps this as a project global; here it is a static cache so
+// StartAimkill derives the damage-info object once (null -> attributes chain).
+static void *g_dmg99 = nullptr;
+
+// ==== StartAimkill — zexisyy verbatim + aikDbg telemetry lines ==============
+// st: 1 ran / 2 no-match / 3 not-live / 4 no-enemy / 5 enemy-fail / 6 no-gun /
+// 7 bad-gun / 8 range / 9 SENT / 10 no-pool-collider / 11 no-checkParams /
+// 12 no-packet.  n: 1 = target acquired.  s: packets sent.
+void StartAimkill() {
+    if (!Vars.AimKillSend) return;
+    aikDbgSt = 1;
+    aikDbgN = 0;
+
+    void *match = game_sdk->Curent_Match();
+    if (!match) { aikDbgSt = 2; return; }
+
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local || !game_sdk->Component_GetTransform(local)) { aikDbgSt = 2; return; }
+    if (game_sdk->get_IsDieing(local) || game_sdk->GetHp(local) <= 0) { aikDbgSt = 3; return; }
+
+    void *enemy = GetClosestEnemy();
+    if (!enemy || enemy == local) { aikDbgSt = 4; return; }
+    if (!game_sdk->Component_GetTransform(enemy)) { aikDbgSt = 5; return; }
+    if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(enemy)) { aikDbgSt = 5; return; }
+    if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(enemy)) { aikDbgSt = 5; return; }
+    if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)) { aikDbgSt = 5; return; }
+    if (game_sdk->GetHp(enemy) <= 0) { aikDbgSt = 5; return; }
+    if (game_sdk->get_isVisible && !game_sdk->get_isVisible(enemy)) { aikDbgSt = 5; return; }
+    if (!tanghinh::isVisible(enemy)) { aikDbgSt = 5; return; }
+    aikDbgN = 1;
+
+    auto getWeaponOnHand = (void *(*)(void *))getRealOffset(OFF_Zexis_GetWeaponOnHand);
+    auto getItemDataID = (int (*)(void *))getRealOffset(OFF_Zexis_GetItemDataID);
+    auto getHeadCollider = (void *(*)(void *))getRealOffset(OFF_Zexis_GetHeadCollider);
+    auto getGameObject = (void *(*)(void *))getRealOffset(OFF_Zexis_GetGameObject);
+    auto getRange = (float (*)(void *))getRealOffset(OFF_Zexis_Weapon_Range);
+    auto getAimingEntity = (void *(*)(void *, void *))getRealOffset(OFF_Zexis_GetAimingEntity);
+    auto buildCheckParams = (void *(*)(void *, void *, void *, bool, void *))getRealOffset(OFF_Zexis_BuildCheckParams);
+    auto weaponDoSomething = (void (*)(void *, void *, uint32_t))getRealOffset(OFF_Zexis_WeaponDoSomething);
+    auto startFiring = (void (*)(void *, void *))getRealOffset(OFF_Zexis_StartFiring);
+    auto stopFire = (void (*)(void *, void *))getRealOffset(OFF_Zexis_StopFire);
+    auto currentSimTimer = (void *(*)(void *))getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
+    auto createDamageReq = (void *(*)(void *))getRealOffset(OFF_Zexis_CreateDamageReq);
+    auto getPlayerID = (COW_GamePlay_IHAAMHPPLMG_o (*)(void *))getRealOffset(OFF_Zexis_GetPlayerID);
+    auto playerIDToUint = (uint32_t (*)(COW_GamePlay_IHAAMHPPLMG_o))getRealOffset(OFF_Zexis_PlayerIDToUint);
+    auto packVector3 = (void *(*)(Vector3))getRealOffset(OFF_Zexis_PackVector3);
+    auto realtimeSinceStartup = (float (*)())getRealOffset(OFF_Zexis_RealtimeSinceStartup);
+    auto gameFacadeSend = (bool (*)(uint32_t, void *, uint8_t, bool))getRealOffset(OFF_Zexis_GameFacade_Send);
+
+    void *weapon = getWeaponOnHand(local);
+    if (!weapon) { aikDbgSt = 6; return; }
+
+    *(float *)((uintptr_t)weapon + OFF_Zexis_Weapon_Field5F0) = 0.0f;
+
+    int weaponId = getItemDataID(weapon);
+    int baseDamage = *(int *)((uintptr_t)weapon + OFF_Zexis_Weapon_BaseDamageField);
+    if (weaponId == -1 || baseDamage == 0) { aikDbgSt = 7; return; }
+    if (baseDamage < 100) baseDamage = 999;
+
+    Vector3 localHead = GetHeadPosition(local);
+    Vector3 enemyHead = GetHeadPosition(enemy);
+    float range = getRange(weapon);
+    if (Vector3::Distance(localHead, enemyHead) > range) { aikDbgSt = 8; return; }
+
+    void *objectPool = *(void **)((uint64_t)local + OFF_Zexis_Player_ObjectPool);
+    if (!objectPool) { aikDbgSt = 10; return; }
+
+    COW_GamePlay_IHAAMHPPLMG_o localPlayerId =
+        *(COW_GamePlay_IHAAMHPPLMG_o *)((uintptr_t)local + OFF_Zexis_Player_PlayerID);
+
+    void *damageInfo = g_dmg99;
+    if (!damageInfo) {
+        void *playerAttributes = *(void **)((uint64_t)local + OFF_Zexis_Player_Attributes);
+        if (playerAttributes) {
+            void *damageModule = *(void **)((uint64_t)playerAttributes + OFF_Zexis_Player_DamageModule);
+            if (damageModule)
+                damageInfo = *(void **)((uint64_t)damageModule + OFF_Zexis_Player_DamageInfo);
+        }
+    }
+    if (damageInfo) {
+        *(int *)((char *)damageInfo + OFF_Zexis_DamageInfo_HitPart) = 1;
+        *(void **)((char *)damageInfo + OFF_Zexis_DamageInfo_Weapon) = weapon;
+        *(int *)((char *)damageInfo + OFF_Zexis_DamageInfo_DamageValue) = baseDamage;
+        *(COW_GamePlay_IHAAMHPPLMG_o *)((char *)damageInfo + OFF_Zexis_DamageInfo_AttackerID) = localPlayerId;
+    }
+
+    void *headCollider = getHeadCollider(enemy);
+    if (!headCollider) { aikDbgSt = 10; return; }
+    void *hitObject = getGameObject(headCollider);
+    if (!hitObject) { aikDbgSt = 10; return; }
+
+    float dx = enemyHead.x - localHead.x;
+    float dy = enemyHead.y - localHead.y;
+    float dz = enemyHead.z - localHead.z;
+    float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+    Vector3 direction = {0, 0, 0};
+    if (dist > 0.0001f) {
+        float inv = 1.0f / dist;
+        direction.x = dx * inv;
+        direction.y = dy * inv;
+        direction.z = dz * inv;
+    }
+
+    void *aimTarget = *(void **)((uint64_t)enemy + OFF_Zexis_Player_AimTarget);
+    if (aimTarget) {
+        char *pool = (char *)objectPool;
+        *(void **)(pool + OFF_Zexis_Pool_HitGameObject) = getGameObject(aimTarget);
+        *(void **)(pool + OFF_Zexis_Pool_HitCollider) = aimTarget;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_HitLocation) = enemyHead;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir) = direction;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir2) = direction;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_StartPos) = localHead;
+        *(int *)(pool + OFF_Zexis_Pool_Damage) = baseDamage;
+        *(float *)(pool + OFF_Zexis_Pool_Distance) = dist;
+        *(int *)(pool + OFF_Zexis_Pool_Flags60) = 1;
+        *(int *)(pool + OFF_Zexis_Pool_Flags64) = 1;
+        *(bool *)(pool + OFF_Zexis_Pool_Flag70) = true;
+        *(bool *)(pool + OFF_Zexis_Pool_Flag71) = true;
+    }
+
+    startFiring(local, weapon);
+
+    void *aimingEntity = getAimingEntity(local, objectPool);
+    void *checkParams = buildCheckParams(weapon, enemy, headCollider, false, nullptr);
+    if (!checkParams) {
+        stopFire(local, weapon);
+        aikDbgSt = 11;
         return;
     }
 
-    busy = true;
-    do
-    {
-        void *match = game_sdk->Curent_Match();
-        if (!match)
-        {
-            aikDbgSt = 2;
-            break;
-        }
-        void *local = game_sdk->GetLocalPlayer(match);
-        if (!local || game_sdk->get_MaxHP(local) <= 0 || game_sdk->get_IsDieing(local))
-        {
-            aikDbgSt = 3; // lobby / dead: not a live player
-            break;
-        }
-        void *weapon = aik.GetWeaponOnHand(local);
-        if (!weapon || !AikIsValidGun(weapon))
-        {
-            aikDbgSt = 4;
-            break;
-        }
-        void *hitInfo = *(void **)((uintptr_t)local + 0xE50); // Player.FDMIEDDNCEC -> CGKJLKPMGDJ
-        if (!hitInfo)
-        {
-            aikDbgSt = 5;
-            break;
-        }
+    uint32_t enemyNetId = playerIDToUint(getPlayerID(enemy));
+    weaponDoSomething(weapon, checkParams, enemyNetId);
 
-        Dictionary<uint8_t *, void **> *players =
-            *(Dictionary<uint8_t *, void **> **)((long)match + 0x148);
-        if (!players)
-        {
-            aikDbgSt = 6;
-            break;
-        }
+    uint32_t localNetId = playerIDToUint(getPlayerID(local));
+    uint32_t uniqueId = *(uint32_t *)((uintptr_t)weapon + OFF_Zexis_Weapon_UniqueNetID);
+    uint32_t weaponField = (weaponId == 1) ? 0u : uniqueId;
 
-        Vector3 firePos;
-        if (!AikHeadPos(local, &firePos) || firePos == Vector3::zero())
-        {
-            aikDbgSt = 7;
-            break;
-        }
+    uint32_t simTick = 0;
+    void *simTimer = currentSimTimer(nullptr);
+    if (simTimer)
+        simTick = *(uint32_t *)((char *)simTimer + OFF_Zexis_SimTimer_TickCount);
 
-        // candidates: alive, non-teammate, visible, in weapon range — scored
-        // by crosshair distance with the behind-camera z-check (Android order)
-        static const int kMaxT = 64;
-        void *cand[kMaxT];
-        float score[kMaxT];
-        int n = 0;
-        ImVec2 middle(ImGui::GetIO().DisplaySize.x * 0.5f,
-                      ImGui::GetIO().DisplaySize.y * 0.5f);
-        for (int u = 0; u < players->getSize() && n < kMaxT; u++)
-        {
-            void *p = players->getValues()[u];
-            if (!p || p == local)
-                continue;
-            if (!*(void **)p)
-                continue; // stale klass guard (Android)
-            if (game_sdk->get_IsDieing(p) || game_sdk->GetHp(p) <= 0)
-                continue;
-            if (aik.IsLocalTeammate(p))
-                continue;
-            // NO visibility filter here = Android candidate loop (visibility
-            // kaytsenna ghir f AikStrike b raycast tanghinh::isVisible)
-            if (!AikInRange(local, p, weapon))
-                continue;
-            Vector3 head;
-            if (!AikHeadPos(p, &head))
-                continue;
-            bool inFront = false;
-            ImVec2 sp = Camera$$WorldToScreen::Checker(head, inFront);
-            float s;
-            if (inFront)
-            {
-                float dx = sp.x - middle.x;
-                float dy = sp.y - middle.y;
-                s = sqrtf(dx * dx + dy * dy);
-            }
-            else
-            {
-                s = 100000.0f + Vector3::Distance(firePos, head);
-            }
-            cand[n] = p;
-            score[n] = s;
-            n++;
-        }
-        aikDbgN = n;
-        if (n == 0)
-        {
-            aikDbgSt = 8;
-            break;
-        }
-        aikDbgSt = 9; // all gates passed — strikes running
+    message_C2S_RUDP_TakeDamage_Req_o2 *__ZexisDamagePacket =
+        (message_C2S_RUDP_TakeDamage_Req_o2 *)createDamageReq(local);
+    if (__ZexisDamagePacket) {
+        __ZexisDamagePacket->AttackableEntityID = enemyNetId;
+        __ZexisDamagePacket->RealDamageValue = 0;
+        __ZexisDamagePacket->ShieldDamageValue = 0;
+        __ZexisDamagePacket->DamageValue = (uint32_t)game_sdk->GetHp(enemy);
+        __ZexisDamagePacket->DamagerID = localNetId;
+        __ZexisDamagePacket->WeaponDataID = weaponId;
+        __ZexisDamagePacket->WeaponUniqueID = weaponField;
+        __ZexisDamagePacket->HitBodyPart = 1;
+        __ZexisDamagePacket->TickCount = simTick;
+        __ZexisDamagePacket->FirePos = (message_PVector3IntPos_o *)packVector3(localHead);
+        __ZexisDamagePacket->TargetPos = (message_PVector3IntPos_o *)packVector3(enemyHead);
+        __ZexisDamagePacket->CheckParams = (monoList<float *> *)checkParams;
+        __ZexisDamagePacket->ArmorRatio = 1.f;
+        __ZexisDamagePacket->ExtraFlag = 0;
+        __ZexisDamagePacket->BaseTime = realtimeSinceStartup();
+        gameFacadeSend(OFF_Zexis_TakeDamageMsgId, __ZexisDamagePacket, 2, 0);
+        aikDbgSent++;
+        aikDbgSt = 9; // packet sent
+    } else {
+        aikDbgSt = 12;
+    }
 
-        // sort by score (bubble — n <= 64, avoids any <algorithm> dependency)
-        for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-                if (score[j] < score[i])
-                {
-                    float ts = score[i]; score[i] = score[j]; score[j] = ts;
-                    void *tp = cand[i]; cand[i] = cand[j]; cand[j] = tp;
-                }
+    stopFire(local, weapon);
+    (void)aimingEntity;
+    (void)hitObject;
+}
 
-        // pass A: up to 2 strikes, kill-aware (Android behaviour)
-        bool anyKilled = false;
-        int struck = 0;
-        for (int i = 0; i < n && struck < 2; i++)
-        {
-            void *t = cand[i];
-            int hpBefore = game_sdk->GetHp(t);
-            AikStrike(local, weapon, hitInfo, firePos, t);
-            int hpAfter = game_sdk->GetHp(t);
-            if (game_sdk->get_IsDieing(t) || hpAfter <= 0)
-                anyKilled = true;
-            else if (hpAfter < hpBefore - 1)
-                anyKilled = true;
-            struck++;
-        }
-        // pass B: every candidate gets its strike (Android double-hits the top 2)
-        for (int i = 0; i < n; i++)
-            AikStrike(local, weapon, hitInfo, firePos, cand[i]);
+// ==== Send108 — zexisyy part 2 verbatim (AimKill -> Vars.AimKillSend) =======
+// NOTICE: "Message 108 is separate from Aimkill Send. Same code on iOS and
+// Android... Channel is 2. Cache flag is 0. Weapon id 1 sends unique id 0."
+static void *NewReloadPacket() {
+    static void *klass = nullptr;
+    if (!klass) klass = FindGameClass("message", "EOBFCLNNIJH");
+    auto objectNew = (void *(*)(void *))UnitySym("il2cpp_object_new");
+    if (!klass || !objectNew) return nullptr;
+    void *obj = objectNew(klass);
+    if (!obj) return nullptr;
+    ((void (*)(void *))getRealOffset(OFF_Zexis_Msg108_Ctor))(obj);
+    return obj;
+}
 
-        if (anyKilled)
-            AikRefreshAfterKill(local);
-    } while (0);
-    busy = false;
+static bool Send108(void *local, void *enemy) {
+    if (!Vars.AimKillSend || !local || !enemy) return false;
+    if (!game_sdk->get_isVisible(enemy) || !tanghinh::isVisible(enemy)) return false;
+
+    auto getWeaponOnHand = (void *(*)(void *))getRealOffset(OFF_Zexis_GetWeaponOnHand);
+    auto getItemDataID = (int (*)(void *))getRealOffset(OFF_Zexis_GetItemDataID);
+    auto getPlayerID = (COW_GamePlay_IHAAMHPPLMG_o (*)(void *))getRealOffset(OFF_Zexis_GetPlayerID);
+    auto playerIDToUint = (uint32_t (*)(COW_GamePlay_IHAAMHPPLMG_o))getRealOffset(OFF_Zexis_PlayerIDToUint);
+    auto gameFacadeSend = (bool (*)(uint32_t, void *, uint8_t, bool))getRealOffset(OFF_Zexis_GameFacade_Send);
+
+    void *weapon = getWeaponOnHand(local);
+    if (!weapon) return false;
+
+    int weaponId = getItemDataID(weapon);
+    uint32_t uniqueId = *(uint32_t *)((uintptr_t)weapon + OFF_Zexis_Weapon_UniqueNetID);
+    uint32_t weaponField = (weaponId == 1) ? 0u : uniqueId;
+    uint32_t localId = playerIDToUint(getPlayerID(local));
+
+    void *packet = NewReloadPacket();
+    if (!packet) return false;
+
+    *(uint32_t *)((char *)packet + OFF_Zexis_Msg108_Id) = localId;
+    *(uint32_t *)((char *)packet + OFF_Zexis_Msg108_Unique) = weaponField;
+    return gameFacadeSend(OFF_Zexis_ReloadMsgId, packet, 2, 0);
 }
