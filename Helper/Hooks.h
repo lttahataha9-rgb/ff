@@ -37,6 +37,11 @@ struct Vars_t
     float flySpeed = 0.75f;
     float flyhei = 300.0f; // FlyV2 sky altitude (video ref = f l'jouj; 0 = ground zone center)
     float khoangcach = 10.0f;
+    // ---- ported from Android EliteXzp (the "Elite" project) ----
+    bool FlyUltra = {};   // Fly Hack V2: endless climb +0.2/tick ("li kantla3o bih")
+    bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
+    bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
+    bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
 } Vars;
 
 class game_sdk_t
@@ -471,13 +476,17 @@ void *GetClosestEnemy()
 // GetClosestEnemy kat7taj FOV circle + camera angle + Vars.Enable → kaykhli
 // l'packet ytsenna l'crosshair ywsel 3la l'enemy (w AimFov=0 → hata kill).
 // Hadi ghir closest by DISTANCE, bla ta gates — packet f nafs l'frame.
-// Visibility baqiya (server raycast validation kayrmo7 ghir target visible).
+// Visibility: PREFER a fully visible target; when none is visible, return the
+// closest enemy anyway so StartAimkill can try the COVER pull (SmartCoverKill)
+// - st=5 keeps the kill off until he really becomes visible (server raycast).
 void *GetClosestEnemyAik()
 {
     try
     {
         float shortestDistance = 9999.0f;
+        float shortestVisDistance = 9999.0f;
         void *closestEnemy = NULL;
+        void *closestVisEnemy = NULL;
         void *get_MatchGame = game_sdk->Curent_Match();
         if (!get_MatchGame)
             return NULL;
@@ -498,22 +507,24 @@ void *GetClosestEnemyAik()
                 continue;
             if (game_sdk->get_IsDieing(Player))
                 continue;
-            if (!game_sdk->get_isVisible(Player))
-                continue;
             if (game_sdk->get_isLocalTeam(Player))
                 continue;
             if (game_sdk->GetHp(Player) <= 0)
                 continue;
-            if (!tanghinh::isVisible(Player))
-                continue;
             float distance = Vector3::Distance(getPosition(Player), getPosition(LocalPlayer));
+            if (game_sdk->get_isVisible(Player) && tanghinh::isVisible(Player) &&
+                distance < shortestVisDistance)
+            {
+                shortestVisDistance = distance;
+                closestVisEnemy = Player;
+            }
             if (distance < shortestDistance)
             {
                 shortestDistance = distance;
                 closestEnemy = Player;
             }
         }
-        return closestEnemy;
+        return closestVisEnemy ? closestVisEnemy : closestEnemy;
     }
     catch (...)
     {
@@ -1339,6 +1350,8 @@ static bool AikInRange(void *local, void *enemy, void *weapon)
 // n = 1 when a target is acquired, s = packets sent (zexisyy port).
 // Shown in the FEATURES tab.
 static int aikDbgSt = 0, aikDbgN = 0, aikDbgSent = 0;
+// cover state (SmartCoverKill, Elite port): 0 none / 1 attempt / 2 pulled
+static int aikDbgC = 0;
 
 static bool aikStrEq(const char *a, const char *b)
 {
@@ -1735,6 +1748,356 @@ static void *FindGameClass(const char *nameSpace, const char *name) {
 // StartAimkill derives the damage-info object once (null -> attributes chain).
 static void *g_dmg99 = nullptr;
 
+// ============================================================
+//  Ported from Android EliteXzp (the "Elite" project)
+//  Fly Ultra / Stop Time / Mark TP / AimKill cover
+//  Every offset dump-verified vs THIS build's dump.cs (fail-closed).
+// ============================================================
+#include <chrono>
+#include <math.h>
+
+// ---- Fly Ultra (Elite: Fly Hack V2 "montee automatique sans saut") ----------
+// Endless climb: +0.2 per Elite tick (~35 ms) = ~5.7 m/s, X/Z stay free.
+// OFF / lobby / dead -> re-arm from the current height ("li kantla3o bih").
+static bool g_fuArmed = false;
+static float g_fuY = 0.0f;
+void RunFlyUltra(float dt)
+{
+    if (!Vars.FlyUltra)
+    {
+        g_fuArmed = false;
+        g_fuY = 0.0f;
+        return;
+    }
+    if (Vars.Flyingtest)
+    {
+        g_fuArmed = false;
+        return; // FlyV2 owns Y (panel unchecks Fly Ultra too - no 2 flies fighting)
+    }
+
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return;
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local)
+        return;
+    if (game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_fuArmed = false;
+        return; // lobby / dead
+    }
+    void *tf = game_sdk->Component_GetTransform(local);
+    if (!tf)
+        return;
+    Vector3 pos = game_sdk->get_position(tf);
+    if (pos == Vector3::zero())
+        return;
+    if (!g_fuArmed)
+    {
+        g_fuY = pos.y;
+        g_fuArmed = true;
+    }
+    g_fuY += 0.20f * (dt / 0.035f); // Elite ApplyFlyHackV2: +0.20f per ~35 ms tick
+    pos.y = g_fuY;
+    Transform_SetPosition(tf, pos);
+}
+
+// ---- Stop Time (Elite: Speed Timer / FastFireMaxTimer freeze) ---------------
+// "ywe9ef l'wa9t": TimeService.m_FixedDeltaTime -> 0.00001 (near freeze),
+// OFF -> restore the saved value (Elite restores 0.033).
+// Dump-verified: GameFacade.CurrentGameSimulationTimer() = RVA 0x5919E58
+// returns TimeService; TimeService.m_FixedDeltaTime @ +0x2C.
+static bool g_stPatched = false;
+static float g_stOrig = 0.033f;
+static float g_stDeltaShow = 0.0f; // FEATURES tab telemetry
+void RunStopTime()
+{
+    static void *(*simTimerFn)() = (void *(*)())getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
+    if (!simTimerFn)
+        return;
+    void *ts = simTimerFn();
+    if (!ts)
+        return;
+    float *pDelta = (float *)((uintptr_t)ts + oxo("0x2C"));
+    if (Vars.StopTime)
+    {
+        float cur = *pDelta;
+        g_stDeltaShow = cur;
+        if (cur <= 0.001f)
+            return; // already frozen (previous enable)
+        // only freeze while actually playing - never the lobby
+        void *match = game_sdk->Curent_Match();
+        void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
+        if (!local || game_sdk->get_MaxHP(local) <= 0)
+            return;
+        if (!g_stPatched)
+        {
+            g_stOrig = cur;
+            g_stPatched = true;
+        }
+        *pDelta = 0.00001f;
+        g_stDeltaShow = 0.00001f;
+    }
+    else if (g_stPatched)
+    {
+        if (*pDelta != g_stOrig)
+            *pDelta = g_stOrig;
+        g_stPatched = false;
+        g_stDeltaShow = *pDelta;
+    }
+}
+
+// ---- MarkedLoc (Elite: MarkedLoc) -------------------------------------------
+// Dump-verified chain off UIInGameScene (GetInGameUIScene):
+//   m_BigMapCtrl @ +0x458 (UIBigMapController)
+//   -> m_MapContentCtrl @ +0xA8 (UIMapContentController)
+//   -> m_LocalMapMarkController @ +0xF8 (UIHudPlayerMarkController)
+//   -> m_pos @ +0xB0 (Vector3 = my own map mark)
+static Vector3 MarkedLoc()
+{
+    void *scene = GetInGameUIScene(); // GameFacade.CurrentInGameUIScene 0x5918DB4
+    if (!scene)
+        return Vector3::zero();
+    void *bigMap = *(void **)((uintptr_t)scene + oxo("0x458"));
+    if (!bigMap)
+        return Vector3::zero();
+    void *mapContent = *(void **)((uintptr_t)bigMap + oxo("0xA8"));
+    if (!mapContent)
+        return Vector3::zero();
+    void *markCtrl = *(void **)((uintptr_t)mapContent + oxo("0xF8"));
+    if (!markCtrl)
+        return Vector3::zero();
+    return *(Vector3 *)((uintptr_t)markCtrl + oxo("0xB0"));
+}
+
+// ---- TeleportToMark (Elite ExecuteTeleMark sequence) ------------------------
+// hop +50 then land on the mark. Elite wraps both sets in forceGlideTP (glide
+// spoof hook - not portable here), so we land at mark + 1.5 m instead: tiny
+// damage-free drop, no terrain embed, no ground-clamp.
+static bool TeleportToMark(Vector3 target)
+{
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return false;
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+        return false;
+    void *tf = game_sdk->Component_GetTransform(local);
+    if (!tf)
+        return false;
+    Vector3 pos = game_sdk->get_position(tf);
+    if (pos == Vector3::zero())
+        return false;
+    Vector3 up = pos;
+    up.y += 50.0f;
+    Transform_SetPosition(tf, up); // Elite: hop first (anti ground-clamp)
+    Vector3 dst = target;
+    dst.y += 1.5f;
+    Transform_SetPosition(tf, dst);
+    return true;
+}
+
+// ---- RunMarkTP: Tele Mark (manual one-shot) + Auto Mark (Fight gate) --------
+// Tele Mark: check -> one TP to my map mark; no mark -> auto-uncheck (Elite
+// auto-clears too).  Auto Mark: ECSMatchPhase == 2 once per round -> TP to the
+// mark + pin 1.5 s (Elite AutoEnableTPOnPhase2 + ExecuteGliderMarkTP 1500 ms).
+// g_markDbg bits: 1 = tele done / 2 = auto fired / 4 = pin active.
+static bool g_tmDone = false;
+static bool g_amFired = false;
+static bool g_amPin = false;
+static Vector3 g_amTarget = Vector3::zero();
+static std::chrono::steady_clock::time_point g_amStart;
+static int g_markDbg = 0;
+void RunMarkTP()
+{
+    g_markDbg = 0;
+
+    // ---- Tele Mark (Elite ExecuteTeleMark, one-shot per toggle) ----
+    if (!Vars.TeleMark)
+    {
+        g_tmDone = false;
+    }
+    else if (!g_tmDone)
+    {
+        Vector3 mark = MarkedLoc();
+        if (mark == Vector3::zero())
+            Vars.TeleMark = false; // no mark on the map -> uncheck (fail-closed)
+        else if (TeleportToMark(mark))
+            g_tmDone = true;
+    }
+    if (g_tmDone)
+        g_markDbg |= 1;
+
+    // ---- Auto Mark (Elite AutoEnableTPOnPhase2) ----
+    if (!Vars.AutoMark)
+    {
+        g_amFired = false;
+        g_amPin = false;
+        return;
+    }
+    void *scene = GetInGameUIScene();
+    uint32_t phase = scene ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18")) : 0;
+    if (phase != 2)
+    {
+        g_amFired = false; // new round -> re-arm (Elite resets at phase != 2)
+        g_amPin = false;
+        return;
+    }
+    if (!g_amFired)
+    {
+        Vector3 mark = MarkedLoc();
+        if (mark != Vector3::zero() && TeleportToMark(mark))
+        {
+            g_amFired = true;
+            g_amTarget = mark;
+            g_amPin = true;
+            g_amStart = std::chrono::steady_clock::now();
+        }
+        return; // waiting for the mark - retried every frame
+    }
+    g_markDbg |= 2;
+    if (g_amPin)
+    {
+        long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - g_amStart)
+                           .count();
+        if (ms >= 1500)
+            g_amPin = false; // Elite: 1500 ms then release (land on the mark)
+        else
+        {
+            void *match = game_sdk->Curent_Match();
+            void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
+            void *tf = local ? game_sdk->Component_GetTransform(local) : nullptr;
+            if (tf)
+            {
+                Vector3 pin = g_amTarget;
+                pin.y += 1.5f;
+                Transform_SetPosition(tf, pin); // glued to the mark (anti-knockback)
+            }
+            g_markDbg |= 4;
+        }
+    }
+}
+
+// ---- SmartCoverKill (Elite SmartCoverKillv2 - the AimKill "cover") ----------
+// Enemy behind cover? Sample positions around him (z line, x line, origin,
+// 8x8 grid, downward steps), raycast from MY head (layer 12) to his head at
+// each candidate; first clear spot -> TELEPORT him into my line of sight so
+// the server raycast accepts the damage packet. Already visible -> true
+// without moving him (Elite verbatim).
+static bool SmartCoverKill(void *enemy)
+{
+    if (!enemy)
+        return false;
+    if (tanghinh::isVisible(enemy))
+        return true;
+    void *enemyTF = game_sdk->Component_GetTransform(enemy);
+    if (!enemyTF)
+        return false;
+    Vector3 enemyRoot = game_sdk->get_position(enemyTF);
+    if (enemyRoot == Vector3::zero())
+        return false;
+    Vector3 enemyHead = GetHeadPosition(enemy);
+    if (enemyHead == Vector3::zero())
+        return false;
+    Vector3 headOffset(enemyHead.x - enemyRoot.x,
+                       enemyHead.y - enemyRoot.y,
+                       enemyHead.z - enemyRoot.z);
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return false;
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local)
+        return false;
+    Vector3 lpHead = GetHeadPosition(local);
+    if (lpHead == Vector3::zero())
+        return false;
+
+    struct CoverCand
+    {
+        bool valid = false;
+        Vector3 root = Vector3::zero();
+        float dx = 0.0f, dy = 0.0f, dz = 0.0f;
+    };
+    auto isBetter = [](const CoverCand &a, const CoverCand &b) -> bool {
+        if (!b.valid)
+            return true;
+        bool aFwd = (a.dz > 0.0f), bFwd = (b.dz > 0.0f);
+        if (aFwd != bFwd)
+            return aFwd && !bFwd;
+        if (fabsf(a.dz) != fabsf(b.dz))
+            return fabsf(a.dz) < fabsf(b.dz);
+        if (fabsf(a.dx) != fabsf(b.dx))
+            return fabsf(a.dx) < fabsf(b.dx);
+        if (fabsf(a.dy) != fabsf(b.dy))
+            return fabsf(a.dy) < fabsf(b.dy);
+        return false;
+    };
+    const float pts[] = {-7.1f, -6.27f, -2.5f, -1.5f, 1.5f, 2.5f, 6.27f, 7.1f};
+    auto checkPt = [&](float dx, float dy, float dz, CoverCand &best) -> bool {
+        Vector3 tRoot = enemyRoot;
+        tRoot.x += dx;
+        tRoot.y += dy;
+        tRoot.z += dz;
+        Vector3 expHead(tRoot.x + headOffset.x, tRoot.y + headOffset.y, tRoot.z + headOffset.z);
+        void *hitObj = nullptr;
+        if (tanghinh::Physics_Raycast(lpHead, expHead, 12, &hitObj))
+            return false;
+        CoverCand c;
+        c.valid = true;
+        c.root = tRoot;
+        c.dx = dx;
+        c.dy = dy;
+        c.dz = dz;
+        if (isBetter(c, best))
+            best = c;
+        return true;
+    };
+
+    CoverCand best = {};
+    for (int i = 0; i < 8; ++i)
+        checkPt(0.0f, 0.0f, pts[i], best);
+    if (best.valid)
+    {
+        Transform_SetPosition(enemyTF, best.root);
+        return true;
+    }
+    for (int i = 0; i < 8; ++i)
+        checkPt(pts[i], 0.0f, 0.0f, best);
+    if (best.valid)
+    {
+        Transform_SetPosition(enemyTF, best.root);
+        return true;
+    }
+    checkPt(0.0f, 0.0f, 0.0f, best);
+    if (best.valid)
+    {
+        Transform_SetPosition(enemyTF, best.root);
+        return true;
+    }
+    for (int z = 0; z < 8; ++z)
+        for (int x = 0; x < 8; ++x)
+            checkPt(pts[x], 0.0f, pts[z], best);
+    if (best.valid)
+    {
+        Transform_SetPosition(enemyTF, best.root);
+        return true;
+    }
+    for (int y = 0; y < 41; ++y)
+    {
+        float dy = -1.40f - 0.01f * (float)y;
+        Vector3 tRoot = enemyRoot;
+        tRoot.y += dy;
+        Vector3 expHead(tRoot.x + headOffset.x, tRoot.y + headOffset.y, tRoot.z + headOffset.z);
+        void *hitObj = nullptr;
+        if (tanghinh::Physics_Raycast(lpHead, expHead, 12, &hitObj))
+            continue;
+        Transform_SetPosition(enemyTF, tRoot);
+        return true;
+    }
+    return false;
+}
+
 // ==== StartAimkill — zexisyy verbatim + aikDbg telemetry lines ==============
 // st: 1 ran / 2 no-match / 3 not-live / 4 no-enemy / 5 enemy-fail / 6 no-gun /
 // 7 bad-gun / 8 range / 9 SENT / 10 no-pool-collider / 11 no-checkParams /
@@ -1743,6 +2106,7 @@ void StartAimkill() {
     if (!Vars.AimKillSend) return;
     aikDbgSt = 1;
     aikDbgN = 0;
+    aikDbgC = 0;
 
     void *match = game_sdk->Curent_Match();
     if (!match) { aikDbgSt = 2; return; }
@@ -1758,8 +2122,23 @@ void StartAimkill() {
     if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(enemy)) { aikDbgSt = 5; return; }
     if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)) { aikDbgSt = 5; return; }
     if (game_sdk->GetHp(enemy) <= 0) { aikDbgSt = 5; return; }
-    if (game_sdk->get_isVisible && !game_sdk->get_isVisible(enemy)) { aikDbgSt = 5; return; }
-    if (!tanghinh::isVisible(enemy)) { aikDbgSt = 5; return; }
+    // cover (EliteXzp SmartCoverKillv2 port): enemy khwa f cover? -> pull him
+    // into my line of sight, re-check, then the packet flies the same frame
+    // (server raycast sees clear LOS). Fail -> st=5 like before.
+    bool aikGVis = (!game_sdk->get_isVisible) || game_sdk->get_isVisible(enemy);
+    bool aikRVis = tanghinh::isVisible(enemy);
+    if (!aikGVis || !aikRVis)
+    {
+        aikDbgC = 1; // cover attempt
+        if (SmartCoverKill(enemy))
+        {
+            aikDbgC = 2; // pulled into LOS
+            aikGVis = (!game_sdk->get_isVisible) || game_sdk->get_isVisible(enemy);
+            aikRVis = tanghinh::isVisible(enemy);
+        }
+    }
+    if (!aikGVis) { aikDbgSt = 5; return; }
+    if (!aikRVis) { aikDbgSt = 5; return; }
     aikDbgN = 1;
 
     auto getWeaponOnHand = (void *(*)(void *))getRealOffset(OFF_Zexis_GetWeaponOnHand);

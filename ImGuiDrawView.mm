@@ -508,7 +508,12 @@ ImFont* Urbanist;
                     }
                     if (ImGui::BeginTabItem(("FEATURES"))) {
                         ImGui::Spacing();
-                        if (ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest)) gFltShow[FLTBTN_FLYV2] = Vars.Flyingtest; // panel = sataf dyal l'button f écran
+                        if (ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest))
+                        {
+                            gFltShow[FLTBTN_FLYV2] = Vars.Flyingtest; // panel = sataf dyal l'button f écran
+                            if (Vars.Flyingtest)
+                                Vars.FlyUltra = false; // no 2 flies fighting (FlyV2 owns Y)
+                        }
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
                         ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st1=wast zone, st5=scene null, st6=p ma zal Fight (blast wa7d direct, bla snap-back)
                         ImGui::Spacing();
@@ -519,7 +524,25 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
-                        ImGui::Text("Aik: st:%d n:%d s:%d", aikDbgSt, aikDbgN, aikDbgSent); // st9=sent, s>0=packets (zexisyy st1-12)
+                        ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, s>0=packets (zexisyy st1-12), c: cover 0 none / 1 attempt / 2 pulled
+                        ImGui::Spacing();
+                        if (ImGui::BeginTable("splitm", 4))
+                        {
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Fly Ultra"), &Vars.FlyUltra) && Vars.FlyUltra)
+                            {
+                                Vars.Flyingtest = false; // mutual exclusion (FlyV2 = blast, FlyUltra = climb)
+                                gFltShow[FLTBTN_FLYV2] = false;
+                            }
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Stop Time"), &Vars.StopTime);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark);
+                        }
+                        ImGui::EndTable();
+                        ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem(("INFO"))) {
@@ -541,6 +564,9 @@ ImFont* Urbanist;
             // ported features — after init() so every function pointer is set
             RunFly();
             RunFlyV2();
+            RunFlyUltra(io.DeltaTime);
+            RunStopTime();
+            RunMarkTP();
             RunTelekill();
             StartAimkill();
             // zexisyy: msg 108 (reload) — same frame as Aimkill, after local+enemy
