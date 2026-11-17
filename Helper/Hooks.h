@@ -1339,9 +1339,9 @@ static bool AikInRange(void *local, void *enemy, void *weapon)
 
 // --- AimKill Send v2 (gaps from Android port) --------------------------------
 // Telemetry: st = last StartAimkill gate (1 ran / 2 no-match / 3 not-live /
-// 4 no-enemy / 5 enemy-fail / 6 no-gun / 7 bad-gun / 8 range / 9 SENT /
-// 10 no-pool-collider / 11 no-checkParams / 12 no-packet),
-// n = 1 when a target is acquired, s = packets sent (zexisyy port).
+// 4 no-enemy / 5 enemy-fail / 6 no-gun / 7 not-a-gun / 8 out-of-range /
+// 9 SENT / 10 no-pool-or-head / 11 strike refused), n = 1 when a target is
+// acquired, s = packets sent (Elite AimkillSendStrike path).
 // Shown in the FEATURES tab.
 static int aikDbgSt = 0, aikDbgN = 0, aikDbgSent = 0;
 // cover state (SmartCoverKill, Elite port): 0 none / 1 attempt / 2 pulled
@@ -1751,17 +1751,18 @@ static void *g_dmg99 = nullptr;
 #include <math.h>
 
 // ---- Fly Ultra (Elite: Fly Hack V2 "montee automatique sans saut") ----------
-// Endless climb: +0.2 per Elite tick (~35 ms) = ~5.7 m/s, X/Z stay free.
-// OFF / lobby / dead -> re-arm from the current height ("li kantla3o bih").
+// RELATIVE climb: pos.y + 0.2 per Elite tick (~35 ms) from the position the
+// server actually has us at every frame. The old absolute g_fuY fought the
+// server's position correction (rose ~2 m then vibrated). Small step = "itl3
+// b chwya". Cap 7 m from activation then self-hold ("ytl3 7m w y7ebbes
+// rasso"). X/Z stay free. OFF / lobby / dead -> re-arm from current height.
 static bool g_fuArmed = false;
-static float g_fuY = 0.0f;
-static float g_fuBase = 0.0f; // activation Y: fly ywsel 8m then yw9ef (hover)
+static float g_fuBase = 0.0f; // activation Y (cap reference)
 void RunFlyUltra(float dt)
 {
     if (!Vars.FlyUltra)
     {
         g_fuArmed = false;
-        g_fuY = 0.0f;
         return;
     }
     if (Vars.Flyingtest)
@@ -1789,26 +1790,28 @@ void RunFlyUltra(float dt)
         return;
     if (!g_fuArmed)
     {
-        g_fuY = pos.y;
         g_fuBase = pos.y;
         g_fuArmed = true;
     }
-    g_fuY += 0.20f * (dt / 0.035f); // Elite ApplyFlyHackV2: +0.20f per ~35 ms tick
-    float fuCap = g_fuBase + 8.0f;   // user: "ywsel 8m then yw9ef" (hover at 8m)
-    if (g_fuY > fuCap)
-        g_fuY = fuCap;
-    pos.y = g_fuY;
+    // relative step: climb from where the server actually has us (post-correction)
+    float next = pos.y + 0.20f * (dt / 0.035f); // Elite ApplyFlyHackV2: +0.20f per ~35 ms tick
+    float fuCap = g_fuBase + 7.0f; // user: "ytl3 7m w y7ebbes rasso" (hold at 7 m)
+    if (next > fuCap)
+        next = fuCap; // self-stop at the cap
+    pos.y = next;
     Transform_SetPosition(tf, pos);
 }
 
-// ---- Stop Time (Elite: Speed Timer / FastFireMaxTimer freeze) ---------------
+// ---- Stop Time (Elite: Speed Timer freeze) — MERGED with Fly Ultra ---------
 // "ywe9ef l'wa9t": TimeService.m_FixedDeltaTime -> 0.00001 (near freeze),
 // OFF -> restore the saved value (Elite restores 0.033).
 // Dump-verified: GameFacade.CurrentGameSimulationTimer() = RVA 0x5919E58
 // returns TimeService; TimeService.m_FixedDeltaTime @ +0x2C.
+// ONE option (user: "option wahda tch3el Stop Time w Fly Ultra"): the Fly
+// Ultra checkbox/button arms BOTH the freeze and the 7 m climb. The old
+// noDelay 0.065 speed-timer path is REMOVED ("machi p speed timer").
 static bool g_stPatched = false;
 static float g_stOrig = 0.033f;
-static bool g_ndPatched = false;   // Elite noDelay (0.065) applied while aimkill armed
 static float g_stDeltaShow = 0.0f; // FEATURES tab telemetry
 void RunStopTime()
 {
@@ -1816,9 +1819,7 @@ void RunStopTime()
     // be null at app entry -> calling into il2cpp then = NRE crash. So: NO
     // game-RVA call at all unless a timer mode is on (or a restore is pending)
     // AND a live local player proves we are inside a match.
-    // Modes: StopTime = freeze 0.00001 / noDelay (Elite FastFireMaxTimer, verbatim
-    // 0.065) while AimKillSend armed -> aimkill twalli 00 (user request).
-    if (!Vars.StopTime && !Vars.AimKillSend && !g_stPatched && !g_ndPatched)
+    if ((!Vars.StopTime && !Vars.FlyUltra) && !g_stPatched)
         return;
     void *match = game_sdk->Curent_Match();
     if (!match)
@@ -1847,9 +1848,10 @@ void RunStopTime()
     if (!ts)
         return;
     float *pDelta = (float *)((uintptr_t)ts + oxo("0x2C"));
-    if (Vars.StopTime)
+    if (Vars.StopTime || Vars.FlyUltra)
     {
-        g_ndPatched = false; // StopTime owns the timer now (priority over noDelay)
+        // merged option: Fly Ultra armed -> freeze the sim (the 7 m climb
+        // then runs on a frozen world = smooth rise, no server correction)
         float cur = *pDelta;
         g_stDeltaShow = cur;
         if (cur <= 0.001f)
@@ -1862,19 +1864,6 @@ void RunStopTime()
         *pDelta = 0.00001f;
         g_stDeltaShow = 0.00001f;
     }
-    else if (Vars.AimKillSend)
-    {
-        // Elite noDelay (FastFireMaxTimer, verbatim): 0.065 while aimkill armed
-        if (g_stPatched)
-        {
-            *pDelta = g_stOrig; // leaving StopTime first
-            g_stPatched = false;
-        }
-        if (*pDelta != 0.065f)
-            *pDelta = 0.065f;
-        g_ndPatched = true;
-        g_stDeltaShow = 0.065f;
-    }
     else
     {
         if (g_stPatched)
@@ -1883,11 +1872,6 @@ void RunStopTime()
                 *pDelta = g_stOrig;
             g_stPatched = false;
         }
-        else if (g_ndPatched)
-        {
-            *pDelta = 0.033f; // Elite restore (verbatim)
-        }
-        g_ndPatched = false;
         g_stDeltaShow = *pDelta;
     }
 }
@@ -2143,10 +2127,11 @@ static bool SmartCoverKill(void *enemy)
     return false;
 }
 
-// ==== StartAimkill — zexisyy verbatim + aikDbg telemetry lines ==============
+// ==== StartAimkill — Elite StartAimKillSend / AimkillSendStrike path ==============
 // st: 1 ran / 2 no-match / 3 not-live / 4 no-enemy / 5 enemy-fail / 6 no-gun /
-// 7 bad-gun / 8 range / 9 SENT / 10 no-pool-collider / 11 no-checkParams /
-// 12 no-packet.  n: 1 = target acquired.  s: packets sent.
+// 7 not-a-gun / 8 out-of-range / 9 SENT / 10 no-pool-or-head / 11 strike
+// refused (AikInit fail or AikStrike internal).  n: 1 = target acquired.
+// s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
 void StartAimkill() {
     if (!Vars.AimKillSend) return;
     aikDbgSt = 1;
@@ -2173,145 +2158,35 @@ void StartAimkill() {
     if (!tanghinh::isVisible(enemy)) { aikDbgSt = 5; return; }
     aikDbgN = 1;
 
-    auto getWeaponOnHand = (void *(*)(void *))getRealOffset(OFF_Zexis_GetWeaponOnHand);
-    auto getItemDataID = (int (*)(void *))getRealOffset(OFF_Zexis_GetItemDataID);
-    auto getHeadCollider = (void *(*)(void *))getRealOffset(OFF_Zexis_GetHeadCollider);
-    auto getGameObject = (void *(*)(void *))getRealOffset(OFF_Zexis_GetGameObject);
-    auto getRange = (float (*)(void *))getRealOffset(OFF_Zexis_Weapon_Range);
-    auto getAimingEntity = (void *(*)(void *, void *))getRealOffset(OFF_Zexis_GetAimingEntity);
-    auto buildCheckParams = (void *(*)(void *, void *, void *, bool, void *))getRealOffset(OFF_Zexis_BuildCheckParams);
-    auto weaponDoSomething = (void (*)(void *, void *, uint32_t))getRealOffset(OFF_Zexis_WeaponDoSomething);
-    auto startFiring = (void (*)(void *, void *))getRealOffset(OFF_Zexis_StartFiring);
-    auto stopFire = (void (*)(void *, void *))getRealOffset(OFF_Zexis_StopFire);
-    auto currentSimTimer = (void *(*)(void *))getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
-    auto createDamageReq = (void *(*)(void *))getRealOffset(OFF_Zexis_CreateDamageReq);
-    auto getPlayerID = (COW_GamePlay_IHAAMHPPLMG_o (*)(void *))getRealOffset(OFF_Zexis_GetPlayerID);
-    auto playerIDToUint = (uint32_t (*)(COW_GamePlay_IHAAMHPPLMG_o))getRealOffset(OFF_Zexis_PlayerIDToUint);
-    auto packVector3 = (void *(*)(Vector3))getRealOffset(OFF_Zexis_PackVector3);
-    auto realtimeSinceStartup = (float (*)())getRealOffset(OFF_Zexis_RealtimeSinceStartup);
-    auto gameFacadeSend = (bool (*)(uint32_t, void *, uint8_t, bool))getRealOffset(OFF_Zexis_GameFacade_Send);
+    // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
+    if (!AikInit()) { aikDbgSt = 11; return; }
 
-    void *weapon = getWeaponOnHand(local);
+    void *weapon = aik.GetWeaponOnHand(local);
     if (!weapon) { aikDbgSt = 6; return; }
+    if (!AikIsValidGun(weapon)) { aikDbgSt = 7; return; } // Elite IsValidGun gate
+    if (!AikInRange(local, enemy, weapon)) { aikDbgSt = 8; return; } // Elite range gate
 
-    *(float *)((uintptr_t)weapon + OFF_Zexis_Weapon_Field5F0) = 0.0f;
-
-    int weaponId = getItemDataID(weapon);
-    int baseDamage = *(int *)((uintptr_t)weapon + OFF_Zexis_Weapon_BaseDamageField);
-    if (weaponId == -1 || baseDamage == 0) { aikDbgSt = 7; return; }
-    if (baseDamage < 100) baseDamage = 999;
-
-    Vector3 localHead = GetHeadPosition(local);
-    Vector3 enemyHead = GetHeadPosition(enemy);
-    float range = getRange(weapon);
-    if (Vector3::Distance(localHead, enemyHead) > range) { aikDbgSt = 8; return; }
-
+    // hit-object scratch = the local player's objectPool (Android _HitObjectInfoWp)
     void *objectPool = *(void **)((uint64_t)local + OFF_Zexis_Player_ObjectPool);
     if (!objectPool) { aikDbgSt = 10; return; }
 
-    COW_GamePlay_IHAAMHPPLMG_o localPlayerId =
-        *(COW_GamePlay_IHAAMHPPLMG_o *)((uintptr_t)local + OFF_Zexis_Player_PlayerID);
+    Vector3 localHead;
+    if (!AikHeadPos(local, &localHead)) { aikDbgSt = 10; return; }
 
-    void *damageInfo = g_dmg99;
-    if (!damageInfo) {
-        void *playerAttributes = *(void **)((uint64_t)local + OFF_Zexis_Player_Attributes);
-        if (playerAttributes) {
-            void *damageModule = *(void **)((uint64_t)playerAttributes + OFF_Zexis_Player_DamageModule);
-            if (damageModule)
-                damageInfo = *(void **)((uint64_t)damageModule + OFF_Zexis_Player_DamageInfo);
-        }
-    }
-    if (damageInfo) {
-        *(int *)((char *)damageInfo + OFF_Zexis_DamageInfo_HitPart) = 1;
-        *(void **)((char *)damageInfo + OFF_Zexis_DamageInfo_Weapon) = weapon;
-        *(int *)((char *)damageInfo + OFF_Zexis_DamageInfo_DamageValue) = baseDamage;
-        *(COW_GamePlay_IHAAMHPPLMG_o *)((char *)damageInfo + OFF_Zexis_DamageInfo_AttackerID) = localPlayerId;
-    }
-
-    void *headCollider = getHeadCollider(enemy);
-    if (!headCollider) { aikDbgSt = 10; return; }
-    void *hitObject = getGameObject(headCollider);
-    if (!hitObject) { aikDbgSt = 10; return; }
-
-    float dx = enemyHead.x - localHead.x;
-    float dy = enemyHead.y - localHead.y;
-    float dz = enemyHead.z - localHead.z;
-    float dist = sqrtf(dx * dx + dy * dy + dz * dz);
-    Vector3 direction = {0, 0, 0};
-    if (dist > 0.0001f) {
-        float inv = 1.0f / dist;
-        direction.x = dx * inv;
-        direction.y = dy * inv;
-        direction.z = dz * inv;
-    }
-
-    void *aimTarget = *(void **)((uint64_t)enemy + OFF_Zexis_Player_AimTarget);
-    if (aimTarget) {
-        char *pool = (char *)objectPool;
-        *(void **)(pool + OFF_Zexis_Pool_HitGameObject) = getGameObject(aimTarget);
-        *(void **)(pool + OFF_Zexis_Pool_HitCollider) = aimTarget;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_HitLocation) = enemyHead;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir) = direction;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir2) = direction;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_StartPos) = localHead;
-        *(int *)(pool + OFF_Zexis_Pool_Damage) = baseDamage;
-        *(float *)(pool + OFF_Zexis_Pool_Distance) = dist;
-        *(int *)(pool + OFF_Zexis_Pool_Flags60) = 1;
-        *(int *)(pool + OFF_Zexis_Pool_Flags64) = 1;
-        *(bool *)(pool + OFF_Zexis_Pool_Flag70) = true;
-        *(bool *)(pool + OFF_Zexis_Pool_Flag71) = true;
-    }
-
-    startFiring(local, weapon);
-
-    void *aimingEntity = getAimingEntity(local, objectPool);
-    void *checkParams = buildCheckParams(weapon, enemy, headCollider, false, nullptr);
-    if (!checkParams) {
-        stopFire(local, weapon);
-        aikDbgSt = 11;
+    // Elite AimkillSendStrike ("00" Send): hit-scratch fill -> hit hash ->
+    // CheckParametros -> shuffle-validate -> StartFiring -> msg 106 with
+    // RealDamageValue=HP / DamageValue=baseDamage|(1<<24) / back-area on ->
+    // StopFire. AikStrike sends the packet itself and does aikDbgSent++.
+    int hpBefore = game_sdk->GetHp(enemy);
+    if (!AikStrike(local, weapon, objectPool, localHead, enemy)) {
+        aikDbgSt = 11; // strike refused internally (fail-closed)
         return;
     }
-
-    uint32_t enemyNetId = playerIDToUint(getPlayerID(enemy));
-    weaponDoSomething(weapon, checkParams, enemyNetId);
-
-    uint32_t localNetId = playerIDToUint(getPlayerID(local));
-    uint32_t uniqueId = *(uint32_t *)((uintptr_t)weapon + OFF_Zexis_Weapon_UniqueNetID);
-    uint32_t weaponField = (weaponId == 1) ? 0u : uniqueId;
-
-    uint32_t simTick = 0;
-    void *simTimer = currentSimTimer(nullptr);
-    if (simTimer)
-        simTick = *(uint32_t *)((char *)simTimer + OFF_Zexis_SimTimer_TickCount);
-
-    message_C2S_RUDP_TakeDamage_Req_o2 *__ZexisDamagePacket =
-        (message_C2S_RUDP_TakeDamage_Req_o2 *)createDamageReq(local);
-    if (__ZexisDamagePacket) {
-        __ZexisDamagePacket->AttackableEntityID = enemyNetId;
-        __ZexisDamagePacket->RealDamageValue = 0;
-        __ZexisDamagePacket->ShieldDamageValue = 0;
-        __ZexisDamagePacket->DamageValue = (uint32_t)game_sdk->GetHp(enemy);
-        __ZexisDamagePacket->DamagerID = localNetId;
-        __ZexisDamagePacket->WeaponDataID = weaponId;
-        __ZexisDamagePacket->WeaponUniqueID = weaponField;
-        __ZexisDamagePacket->HitBodyPart = 1;
-        __ZexisDamagePacket->TickCount = simTick;
-        __ZexisDamagePacket->FirePos = (message_PVector3IntPos_o *)packVector3(localHead);
-        __ZexisDamagePacket->TargetPos = (message_PVector3IntPos_o *)packVector3(enemyHead);
-        __ZexisDamagePacket->CheckParams = (monoList<float *> *)checkParams;
-        __ZexisDamagePacket->ArmorRatio = 1.f;
-        __ZexisDamagePacket->ExtraFlag = 0;
-        __ZexisDamagePacket->BaseTime = realtimeSinceStartup();
-        gameFacadeSend(OFF_Zexis_TakeDamageMsgId, __ZexisDamagePacket, 2, 0);
-        aikDbgSent++;
-        aikDbgSt = 9; // packet sent
-    } else {
-        aikDbgSt = 12;
-    }
-
-    stopFire(local, weapon);
-    (void)aimingEntity;
-    (void)hitObject;
+    aikDbgSt = 9; // packet sent
+    // Elite AimkillRefreshAfterKill: SwapWeapon 1/2 + reset after a confirmed kill
+    if (game_sdk->GetHp(enemy) < hpBefore ||
+        (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)))
+        AikRefreshAfterKill(local);
 }
 
 // ==== Send108 — zexisyy part 2 verbatim (AimKill -> Vars.AimKillSend) =======

@@ -74,8 +74,8 @@ static UIWindow *SafeHostWindow(void)
 // ON → lounha ybdel (Fly=7amra, Runn/Telekill=mauve, Send=khadra — user:
 // "mnin ndire liha ON itbdel lounha"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_FLYULTRA = 4, FLTBTN_STOPTIME = 5, FLTBTN_AUTOMARK = 6, FLTBTN_COUNT = 7 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_FLYULTRA = 4, FLTBTN_AUTOMARK = 5, FLTBTN_COUNT = 6 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -111,7 +111,6 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // RUNN     - mauve
     ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  - khadra
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYULTRA - 7amra (fly family)
-    ImVec4(0.30f, 0.75f, 1.00f, 1.00f), // STOPTIME - zerg
     ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (CHIBYA)
 };
 
@@ -478,9 +477,6 @@ ImFont* Urbanist;
                 case FLTBTN_FLYULTRA:
                     DrawFloatingButton(i, oxorany("Fly Ultra"), &Vars.FlyUltra);
                     break;
-                case FLTBTN_STOPTIME:
-                    DrawFloatingButton(i, oxorany("Stop Time"), &Vars.StopTime);
-                    break;
                 case FLTBTN_AUTOMARK:
                     DrawFloatingButton(i, oxorany("Auto Mark"), &Vars.AutoMark);
                     break;
@@ -552,9 +548,9 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
-                        ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, s>0=packets (zexisyy st1-12), c: cover 0 none / 1 attempt / 2 pulled
+                        ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, s>0=packets (Elite Send st1-11), c: cover always 0 (removed)
                         ImGui::Spacing();
-                        if (ImGui::BeginTable("splitm", 4))
+                        if (ImGui::BeginTable("splitm", 3))
                         {
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Fly Ultra"), &Vars.FlyUltra))
@@ -567,13 +563,12 @@ ImFont* Urbanist;
                                 }
                             }
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime;
-                            ImGui::TableNextColumn();
                             ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark);
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
                         }
                         ImGui::EndTable();
+                        ImGui::TextDisabled("Fly Ultra = Stop Time + Fly (climb 7m)"); // option wahda (user)
                         ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
                         ImGui::EndTabItem();
                     }
