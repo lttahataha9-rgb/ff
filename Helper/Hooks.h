@@ -476,16 +476,14 @@ void *GetClosestEnemy()
 // GetClosestEnemy kat7taj FOV circle + camera angle + Vars.Enable → kaykhli
 // l'packet ytsenna l'crosshair ywsel 3la l'enemy (w AimFov=0 → hata kill).
 // Hadi ghir closest by DISTANCE, bla ta gates — packet f nafs l'frame.
-// Visibility: PREFER a fully visible target; when none is visible, return the
-// closest enemy anyway so StartAimkill can try the COVER pull (SmartCoverKill)
-// - st=5 keeps the kill off until he really becomes visible (server raycast).
+// Visibility: fully visible targets ONLY (cover port removed - user asked to
+// strip it from the aimkill): hidden enemy = st=5, no kill, no packet - exactly
+// the zexisyy behavior (server raycast must see him).
 void *GetClosestEnemyAik()
 {
     try
     {
-        float shortestDistance = 9999.0f;
         float shortestVisDistance = 9999.0f;
-        void *closestEnemy = NULL;
         void *closestVisEnemy = NULL;
         void *get_MatchGame = game_sdk->Curent_Match();
         if (!get_MatchGame)
@@ -518,13 +516,9 @@ void *GetClosestEnemyAik()
                 shortestVisDistance = distance;
                 closestVisEnemy = Player;
             }
-            if (distance < shortestDistance)
-            {
-                shortestDistance = distance;
-                closestEnemy = Player;
-            }
         }
-        return closestVisEnemy ? closestVisEnemy : closestEnemy;
+        // cover port removed (user: "ghir 7iyed l'cover") - visible-only again
+        return closestVisEnemy;
     }
     catch (...)
     {
@@ -1761,6 +1755,7 @@ static void *g_dmg99 = nullptr;
 // OFF / lobby / dead -> re-arm from the current height ("li kantla3o bih").
 static bool g_fuArmed = false;
 static float g_fuY = 0.0f;
+static float g_fuBase = 0.0f; // activation Y: fly ywsel 8m then yw9ef (hover)
 void RunFlyUltra(float dt)
 {
     if (!Vars.FlyUltra)
@@ -1795,9 +1790,13 @@ void RunFlyUltra(float dt)
     if (!g_fuArmed)
     {
         g_fuY = pos.y;
+        g_fuBase = pos.y;
         g_fuArmed = true;
     }
     g_fuY += 0.20f * (dt / 0.035f); // Elite ApplyFlyHackV2: +0.20f per ~35 ms tick
+    float fuCap = g_fuBase + 8.0f;   // user: "ywsel 8m then yw9ef" (hover at 8m)
+    if (g_fuY > fuCap)
+        g_fuY = fuCap;
     pos.y = g_fuY;
     Transform_SetPosition(tf, pos);
 }
@@ -1809,14 +1808,17 @@ void RunFlyUltra(float dt)
 // returns TimeService; TimeService.m_FixedDeltaTime @ +0x2C.
 static bool g_stPatched = false;
 static float g_stOrig = 0.033f;
+static bool g_ndPatched = false;   // Elite noDelay (0.065) applied while aimkill armed
 static float g_stDeltaShow = 0.0f; // FEATURES tab telemetry
 void RunStopTime()
 {
     // iOS hardening (entry crash fix): the game's static CurrentGame may still
     // be null at app entry -> calling into il2cpp then = NRE crash. So: NO
-    // game-RVA call at all unless Stop Time is on (or a restore is pending)
+    // game-RVA call at all unless a timer mode is on (or a restore is pending)
     // AND a live local player proves we are inside a match.
-    if (!Vars.StopTime && !g_stPatched)
+    // Modes: StopTime = freeze 0.00001 / noDelay (Elite FastFireMaxTimer, verbatim
+    // 0.065) while AimKillSend armed -> aimkill twalli 00 (user request).
+    if (!Vars.StopTime && !Vars.AimKillSend && !g_stPatched && !g_ndPatched)
         return;
     void *match = game_sdk->Curent_Match();
     if (!match)
@@ -1847,6 +1849,7 @@ void RunStopTime()
     float *pDelta = (float *)((uintptr_t)ts + oxo("0x2C"));
     if (Vars.StopTime)
     {
+        g_ndPatched = false; // StopTime owns the timer now (priority over noDelay)
         float cur = *pDelta;
         g_stDeltaShow = cur;
         if (cur <= 0.001f)
@@ -1859,11 +1862,32 @@ void RunStopTime()
         *pDelta = 0.00001f;
         g_stDeltaShow = 0.00001f;
     }
-    else if (g_stPatched)
+    else if (Vars.AimKillSend)
     {
-        if (*pDelta != g_stOrig)
-            *pDelta = g_stOrig;
-        g_stPatched = false;
+        // Elite noDelay (FastFireMaxTimer, verbatim): 0.065 while aimkill armed
+        if (g_stPatched)
+        {
+            *pDelta = g_stOrig; // leaving StopTime first
+            g_stPatched = false;
+        }
+        if (*pDelta != 0.065f)
+            *pDelta = 0.065f;
+        g_ndPatched = true;
+        g_stDeltaShow = 0.065f;
+    }
+    else
+    {
+        if (g_stPatched)
+        {
+            if (*pDelta != g_stOrig)
+                *pDelta = g_stOrig;
+            g_stPatched = false;
+        }
+        else if (g_ndPatched)
+        {
+            *pDelta = 0.033f; // Elite restore (verbatim)
+        }
+        g_ndPatched = false;
         g_stDeltaShow = *pDelta;
     }
 }
@@ -1892,9 +1916,9 @@ static Vector3 MarkedLoc()
 }
 
 // ---- TeleportToMark (Elite ExecuteTeleMark sequence) ------------------------
-// hop +50 then land on the mark. Elite wraps both sets in forceGlideTP (glide
-// spoof hook - not portable here), so we land at mark + 1.5 m instead: tiny
-// damage-free drop, no terrain embed, no ground-clamp.
+// hop +50 then drop onto the mark from +7 m (user: "y-tipinni fouqha nichan
+// b 7m" = exactly 7 m above the mark). Elite wraps both sets in forceGlideTP
+// (glide spoof hook - not portable here), so we do a clean 7 m drop instead.
 static bool TeleportToMark(Vector3 target)
 {
     void *match = game_sdk->Curent_Match();
@@ -1913,7 +1937,7 @@ static bool TeleportToMark(Vector3 target)
     up.y += 50.0f;
     Transform_SetPosition(tf, up); // Elite: hop first (anti ground-clamp)
     Vector3 dst = target;
-    dst.y += 1.5f;
+    dst.y += 7.0f;
     Transform_SetPosition(tf, dst);
     return true;
 }
@@ -2143,23 +2167,10 @@ void StartAimkill() {
     if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(enemy)) { aikDbgSt = 5; return; }
     if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)) { aikDbgSt = 5; return; }
     if (game_sdk->GetHp(enemy) <= 0) { aikDbgSt = 5; return; }
-    // cover (EliteXzp SmartCoverKillv2 port): enemy khwa f cover? -> pull him
-    // into my line of sight, re-check, then the packet flies the same frame
-    // (server raycast sees clear LOS). Fail -> st=5 like before.
-    bool aikGVis = (!game_sdk->get_isVisible) || game_sdk->get_isVisible(enemy);
-    bool aikRVis = tanghinh::isVisible(enemy);
-    if (!aikGVis || !aikRVis)
-    {
-        aikDbgC = 1; // cover attempt
-        if (SmartCoverKill(enemy))
-        {
-            aikDbgC = 2; // pulled into LOS
-            aikGVis = (!game_sdk->get_isVisible) || game_sdk->get_isVisible(enemy);
-            aikRVis = tanghinh::isVisible(enemy);
-        }
-    }
-    if (!aikGVis) { aikDbgSt = 5; return; }
-    if (!aikRVis) { aikDbgSt = 5; return; }
+    // cover port REMOVED (user: "ghir 7iyed l'cover mn l'aimkill") ->
+    // visibility gates only, exactly the zexisyy behavior.
+    if ((!game_sdk->get_isVisible) || !game_sdk->get_isVisible(enemy)) { aikDbgSt = 5; return; }
+    if (!tanghinh::isVisible(enemy)) { aikDbgSt = 5; return; }
     aikDbgN = 1;
 
     auto getWeaponOnHand = (void *(*)(void *))getRealOffset(OFF_Zexis_GetWeaponOnHand);

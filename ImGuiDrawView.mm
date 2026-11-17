@@ -74,8 +74,8 @@ static UIWindow *SafeHostWindow(void)
 // ON → lounha ybdel (Fly=7amra, Runn/Telekill=mauve, Send=khadra — user:
 // "mnin ndire liha ON itbdel lounha"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_COUNT = 4 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_FLYULTRA = 4, FLTBTN_STOPTIME = 5, FLTBTN_AUTOMARK = 6, FLTBTN_COUNT = 7 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -106,10 +106,13 @@ static bool FFPointOverFloating(CGPoint p)
 // ON colors dyal l'floating buttons (user: "wa7da l7mra, wa7da mauve,
 // wa7da khadra") — t-tbdlo ghir mnin l'button yweli ON
 static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
-    ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // TELEKILL — mauve
-    ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYV2    — 7amra
-    ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // RUNN     — mauve
-    ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  — khadra
+    ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // TELEKILL - mauve
+    ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYV2    - 7amra
+    ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // RUNN     - mauve
+    ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  - khadra
+    ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYULTRA - 7amra (fly family)
+    ImVec4(0.30f, 0.75f, 1.00f, 1.00f), // STOPTIME - zerg
+    ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (CHIBYA)
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -472,6 +475,15 @@ ImFont* Urbanist;
                 case FLTBTN_AIMKILL:
                     DrawFloatingButton(i, oxorany("Send"), &Vars.AimKillSend);
                     break;
+                case FLTBTN_FLYULTRA:
+                    DrawFloatingButton(i, oxorany("Fly Ultra"), &Vars.FlyUltra);
+                    break;
+                case FLTBTN_STOPTIME:
+                    DrawFloatingButton(i, oxorany("Stop Time"), &Vars.StopTime);
+                    break;
+                case FLTBTN_AUTOMARK:
+                    DrawFloatingButton(i, oxorany("Auto Mark"), &Vars.AutoMark);
+                    break;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
@@ -545,17 +557,21 @@ ImFont* Urbanist;
                         if (ImGui::BeginTable("splitm", 4))
                         {
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Fly Ultra"), &Vars.FlyUltra) && Vars.FlyUltra)
+                            if (ImGui::Checkbox(oxorany("Fly Ultra"), &Vars.FlyUltra))
                             {
-                                Vars.Flyingtest = false; // mutual exclusion (FlyV2 = blast, FlyUltra = climb)
-                                gFltShow[FLTBTN_FLYV2] = false;
+                                gFltShow[FLTBTN_FLYULTRA] = Vars.FlyUltra; // panel = latch dyal l'button f ecran
+                                if (Vars.FlyUltra)
+                                {
+                                    Vars.Flyingtest = false; // mutual exclusion (FlyV2 = blast, FlyUltra = climb)
+                                    gFltShow[FLTBTN_FLYV2] = false;
+                                }
                             }
                             ImGui::TableNextColumn();
-                            ImGui::Checkbox(oxorany("Stop Time"), &Vars.StopTime);
+                            if (ImGui::Checkbox(oxorany("Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime;
                             ImGui::TableNextColumn();
                             ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark);
                             ImGui::TableNextColumn();
-                            ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark);
+                            if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
                         }
                         ImGui::EndTable();
                         ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
