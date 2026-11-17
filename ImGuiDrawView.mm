@@ -570,11 +570,13 @@ ImFont* Urbanist;
             RunTelekill();
             StartAimkill();
             // zexisyy: msg 108 (reload) — same frame as Aimkill, after local+enemy
+            // (finder gated too: ma ndirouch raycast/finder f l'entry/lobby)
+            if (Vars.AimKillSend)
             {
                 void *aikM108 = game_sdk->Curent_Match();
                 void *aikL108 = aikM108 ? game_sdk->GetLocalPlayer(aikM108) : nullptr;
                 void *aikE108 = GetClosestEnemyAik(); // instant target (00s)
-                if (Vars.AimKillSend && aikL108 && aikE108)
+                if (aikL108 && aikE108)
                     Send108(aikL108, aikE108);
             }
             if (Vars.AimFov > 0) {

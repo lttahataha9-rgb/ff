@@ -1812,7 +1812,33 @@ static float g_stOrig = 0.033f;
 static float g_stDeltaShow = 0.0f; // FEATURES tab telemetry
 void RunStopTime()
 {
-    static void *(*simTimerFn)() = (void *(*)())getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
+    // iOS hardening (entry crash fix): the game's static CurrentGame may still
+    // be null at app entry -> calling into il2cpp then = NRE crash. So: NO
+    // game-RVA call at all unless Stop Time is on (or a restore is pending)
+    // AND a live local player proves we are inside a match.
+    if (!Vars.StopTime && !g_stPatched)
+        return;
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return;
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+        return; // lobby / dead: ma n-touchiwch l'game timers
+    // resolve + validate the RVA only once we are really playing: same dladdr
+    // same-image check as Transform_SetPosition (wrong-dump offset = stay off)
+    static void *(*simTimerFn)() = nullptr;
+    static bool simTried = false;
+    if (!simTried)
+    {
+        simTried = true;
+        void *cand = (void *)getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
+        Dl_info goodInfo{};
+        Dl_info candInfo{};
+        if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+            dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase &&
+            goodInfo.dli_fbase == candInfo.dli_fbase)
+            simTimerFn = (void *(*)())cand;
+    }
     if (!simTimerFn)
         return;
     void *ts = simTimerFn();
@@ -1825,11 +1851,6 @@ void RunStopTime()
         g_stDeltaShow = cur;
         if (cur <= 0.001f)
             return; // already frozen (previous enable)
-        // only freeze while actually playing - never the lobby
-        void *match = game_sdk->Curent_Match();
-        void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
-        if (!local || game_sdk->get_MaxHP(local) <= 0)
-            return;
         if (!g_stPatched)
         {
             g_stOrig = cur;
@@ -1905,7 +1926,7 @@ static bool TeleportToMark(Vector3 target)
 static bool g_tmDone = false;
 static bool g_amFired = false;
 static bool g_amPin = false;
-static Vector3 g_amTarget = Vector3::zero();
+static Vector3 g_amTarget; // plain static (zero-init) - ma ndirch dynamic init f load time
 static std::chrono::steady_clock::time_point g_amStart;
 static int g_markDbg = 0;
 void RunMarkTP()
