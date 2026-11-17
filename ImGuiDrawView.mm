@@ -112,13 +112,24 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  — khadra
 };
 
+// panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
+static float g_panelCol[4] = {0.11f, 0.12f, 0.16f, 0.95f};
+static ImVec4 PanelBright(float k)
+{
+    return ImVec4(
+        g_panelCol[0] + (1.0f - g_panelCol[0]) * k,
+        g_panelCol[1] + (1.0f - g_panelCol[1]) * k,
+        g_panelCol[2] + (1.0f - g_panelCol[2]) * k,
+        1.0f);
+}
+
 static void DrawFloatingButton(int idx, const char *label, bool *v)
 {
     // Visible ghir mnin n-active-ha f l'panel (gFltShow). OFF = look qdim
     // (border cyan, label 7amra, knob byd); ON → kolchi ybdel l'loun dyalha
     // (kFltOnCol) — user: "mnin ndire liha ON itbdel lounha".
     FltBtnState &b = gFltBtn[idx];
-    const float W = 50.0f, H = 46.0f;   // user exact: "50 46" (qbel 80x74 → 104x96)
+    const float W = 54.0f, H = 58.0f;   // user jdida: "54 58" (qbel 50x46)
     if (!b.inited) {
         b.inited = true;
         ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -434,7 +445,7 @@ ImFont* Urbanist;
     UIWindow *menuHost = SafeHostWindow();
     CGSize menuSize = (menuHost && menuHost.rootViewController.view) ? menuHost.rootViewController.view.frame.size : UIScreen.mainScreen.bounds.size;
     CGFloat x = (menuSize.width - 380) / 2;
-    CGFloat y = (menuSize.height - 260) / 2;
+    CGFloat y = (menuSize.height - 340) / 2;
     disp.width = io.DisplaySize.x;   // was never set -> Arrow ESP bounds were wrong
     disp.height = io.DisplaySize.y;
             // floating buttons: GHIR li n-active-hom f l'panel (gFltShow —
@@ -464,11 +475,16 @@ ImFont* Urbanist;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(365, 270), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(365, 340), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
             {                
+                // design: loun dyal l'panel (SETTINGS) + border/tab tinted
+                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(g_panelCol[0], g_panelCol[1], g_panelCol[2], g_panelCol[3]));
+                ImGui::PushStyleColor(ImGuiCol_Border, PanelBright(0.35f));
+                ImGui::PushStyleColor(ImGuiCol_TabActive, PanelBright(0.18f));
+                ImGui::PushStyleColor(ImGuiCol_TabHovered, PanelBright(0.30f));
                 ImGui::Begin(oxorany("  4xCRYPTED  |  FreeFire 1.132.X"), &MenDeal);
-                if (ImGui::BeginTabBar(oxorany("Tab"),ImGuiTabBarFlags_FittingPolicyScroll)) {
+                if (ImGui::BeginTabBar(oxorany("Tab"), ImGuiTabBarFlags_FittingPolicyResizeDown)) { // resize-down: kolchi tab yban daiman (ma kat7bet)
                     if (ImGui::BeginTabItem(("ESP"))) {
                     ImGui::Checkbox(oxorany("ESP master"), &Vars.Enable);
                         if (ImGui::BeginTable("split", 4))
@@ -545,6 +561,31 @@ ImFont* Urbanist;
                         ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
                         ImGui::EndTabItem();
                     }
+                    if (ImGui::BeginTabItem(("SETTINGS"))) {
+                        ImGui::Spacing();
+                        ImGui::Text("Loun dyal l'panel (design):");
+                        ImGui::ColorEdit4("Panel Color", g_panelCol);
+                        ImGui::Text("Presets:");
+                        static const ImVec4 kPresets[5] = {
+                            {0.11f, 0.12f, 0.16f, 0.95f}, // dark navy (default)
+                            {0.85f, 0.92f, 1.00f, 0.95f}, // ice / byd
+                            {0.10f, 0.55f, 0.75f, 0.95f}, // cyan
+                            {0.15f, 0.55f, 0.25f, 0.95f}, // green
+                            {0.65f, 0.15f, 0.20f, 0.95f}, // red
+                        };
+                        for (int pi = 0; pi < 5; pi++)
+                        {
+                            if (pi) ImGui::SameLine();
+                            char pid[16];
+                            snprintf(pid, sizeof(pid), "##pre%d", pi);
+                            if (ImGui::ColorButton(pid, kPresets[pi], ImGuiColorEditFlags_NoBorder, ImVec2(26, 26)))
+                            {
+                                for (int pc = 0; pc < 4; pc++)
+                                    g_panelCol[pc] = (&kPresets[pi].x)[pc];
+                            }
+                        }
+                        ImGui::EndTabItem();
+                    }
                     if (ImGui::BeginTabItem(("INFO"))) {
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.31f, 0.90f, 1.00f, 1.00f), "4xCRYPTED");
@@ -555,6 +596,7 @@ ImFont* Urbanist;
                     ImGui::EndTabBar();
                 }
         ImGui::End();
+        ImGui::PopStyleColor(4);
     }
             ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
             get_players();
