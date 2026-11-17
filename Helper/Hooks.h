@@ -466,6 +466,61 @@ void *GetClosestEnemy()
         return NULL;
     }
 }
+
+// ==== AimKill target — INSTANT ("twali 00 second f l9etlat l'enemy") ========
+// GetClosestEnemy kat7taj FOV circle + camera angle + Vars.Enable → kaykhli
+// l'packet ytsenna l'crosshair ywsel 3la l'enemy (w AimFov=0 → hata kill).
+// Hadi ghir closest by DISTANCE, bla ta gates — packet f nafs l'frame.
+// Visibility baqiya (server raycast validation kayrmo7 ghir target visible).
+void *GetClosestEnemyAik()
+{
+    try
+    {
+        float shortestDistance = 9999.0f;
+        void *closestEnemy = NULL;
+        void *get_MatchGame = game_sdk->Curent_Match();
+        if (!get_MatchGame)
+            return NULL;
+        void *LocalPlayer = game_sdk->GetLocalPlayer(get_MatchGame);
+        if (!LocalPlayer || !game_sdk->Component_GetTransform(LocalPlayer))
+            return NULL;
+        Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((long)get_MatchGame + oxo("0x148"));
+        if (!players)
+            return NULL;
+        for (int u = 0; u < players->getSize(); u++)
+        {
+            void *Player = players->getValues()[u];
+            if (!Player)
+                continue;
+            if (Player == LocalPlayer)
+                continue;
+            if (!game_sdk->get_MaxHP(Player))
+                continue;
+            if (game_sdk->get_IsDieing(Player))
+                continue;
+            if (!game_sdk->get_isVisible(Player))
+                continue;
+            if (game_sdk->get_isLocalTeam(Player))
+                continue;
+            if (game_sdk->GetHp(Player) <= 0)
+                continue;
+            if (!tanghinh::isVisible(Player))
+                continue;
+            float distance = Vector3::Distance(getPosition(Player), getPosition(LocalPlayer));
+            if (distance < shortestDistance)
+            {
+                shortestDistance = distance;
+                closestEnemy = Player;
+            }
+        }
+        return closestEnemy;
+    }
+    catch (...)
+    {
+        return NULL;
+    }
+}
+
 void ProcessAimbot()
 {
     if (!Vars.Aimbot)
@@ -1696,7 +1751,7 @@ void StartAimkill() {
     if (!local || !game_sdk->Component_GetTransform(local)) { aikDbgSt = 2; return; }
     if (game_sdk->get_IsDieing(local) || game_sdk->GetHp(local) <= 0) { aikDbgSt = 3; return; }
 
-    void *enemy = GetClosestEnemy();
+    void *enemy = GetClosestEnemyAik(); // instant — bla FOV/angle gates (00s)
     if (!enemy || enemy == local) { aikDbgSt = 4; return; }
     if (!game_sdk->Component_GetTransform(enemy)) { aikDbgSt = 5; return; }
     if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(enemy)) { aikDbgSt = 5; return; }

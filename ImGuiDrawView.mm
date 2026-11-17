@@ -547,7 +547,7 @@ ImFont* Urbanist;
             {
                 void *aikM108 = game_sdk->Curent_Match();
                 void *aikL108 = aikM108 ? game_sdk->GetLocalPlayer(aikM108) : nullptr;
-                void *aikE108 = GetClosestEnemy();
+                void *aikE108 = GetClosestEnemyAik(); // instant target (00s)
                 if (Vars.AimKillSend && aikL108 && aikE108)
                     Send108(aikL108, aikE108);
             }
