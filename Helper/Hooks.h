@@ -2384,43 +2384,31 @@ static Vector3 MarkedLoc()
     return *(Vector3 *)((uintptr_t)markCtrl + oxo("0xB0"));
 }
 
-// ---- forceGlideTP (Elite): spoof IsFoldWingGliding for the LOCAL player ----
-// around a teleport so the movement system accepts the new position instead
-// of ground-clamping/snapping it back to 0 m (Elite MasterBool.forceGlideTP +
-// hook_IsFoldWingGliding). dump.cs: COW.GamePlay.Player.IsFoldWingGliding()
-// RVA 0x570D98C. Hook body = plain ptr compares ONLY (no game calls) so it is
-// safe even before game_sdk init.
-static bool g_forceGlideTP = false;
-static void *g_glideLocal = nullptr;
-static bool (*g_origFoldWingGliding)(void *) = nullptr;
-static bool Hook_FoldWingGliding(void *player)
-{
-    if (g_forceGlideTP && player && player == g_glideLocal)
-        return true; // Elite: forceGlideTP && player == local
-    if (g_origFoldWingGliding)
-        return g_origFoldWingGliding(player);
-    return false;
-}
-static void InstallGlideTPHook()
-{
-    static bool tried = false;
-    if (tried)
-        return;
-    tried = true;
-    HOOK(0x570D98C, Hook_FoldWingGliding, g_origFoldWingGliding);
-}
+// ---- forceGlideTP — REMOVED (crash fix, user: "mnin fixiti teleport la 7m
+// tra wahd l'problem: l'crash — fixih m3ak had l'build") ----------------------
+// v1 (f450242) hooked Player.IsFoldWingGliding (0x570D98C) and HELD the spoof
+// TRUE for the whole 500 ms pin. Elite NEVER does that: it wraps forceGlideTP
+// ONLY around Transform_set_position in the SAME tick (Elite ApplyTeleSpot:
+// forceGlideTP = true -> set_position -> forceGlideTP = false, plus their
+// "filet de securite: jamais bloque en glide" safety clears). Holding the
+// spoof true for 500 ms makes the game run fold-wing-glide logic
+// (movement/camera/state machine) with NO real glide started -> CRASH.
+// FIX: no hook, no spoof at all — the +7 m is held by the plain per-frame pin
+// below (same mechanism as Auto Mark's proven 1.5 s pin, never crashed), and
+// the teleport itself worked WITHOUT any spoof before the 7 m change
+// (430e8d2) — the pin re-asserts the position every frame anyway.
 
 // shared +7 m pin (Tele Mark + Fly Ultra cap-TP): hold the arrival spot for
-// 500 ms so clamp/knockback cannot eat the 7 m, then release -> the game
-// drops us ON the mark (user: "ay blas n teleporta liha khaso ytipini
-// fou9ha b 7 m").
+// 500 ms (PLAIN Transform_SetPosition, NO spoof — crash fix) so clamp /
+// knockback cannot eat the 7 m, then release -> the game drops us ON the mark
+// (user: "ay blas n teleporta liha khaso ytipini fou9ha b 7 m").
 static bool g_tpPin = false;
 static Vector3 g_tpPinPos;
 static std::chrono::steady_clock::time_point g_tpPinStart;
 
 // ---- TeleportToMark (Elite ExecuteTeleMark sequence) ------------------------
-// hop +50 then arrive exactly +7 m above the target (mark), HOLD 500 ms
-// (glide spoof + per-frame pin) then release -> drop onto the mark.
+// hop +50 then arrive exactly +7 m above the target (mark), HOLD 500 ms with
+// the plain pin, then release -> drop onto the mark. NO glide spoof (crash fix).
 static bool TeleportToMark(Vector3 target)
 {
     void *match = game_sdk->Curent_Match();
@@ -2435,9 +2423,6 @@ static bool TeleportToMark(Vector3 target)
     Vector3 pos = game_sdk->get_position(tf);
     if (pos == Vector3::zero())
         return false;
-    InstallGlideTPHook();
-    g_glideLocal = local;
-    g_forceGlideTP = true; // movement system accepts the hop/TP (Elite)
     Vector3 up = pos;
     up.y += 50.0f;
     Transform_SetPosition(tf, up); // Elite: hop first (anti ground-clamp)
@@ -2466,7 +2451,8 @@ void RunMarkTP()
     g_markDbg = 0;
 
     // shared +7 m pin: hold the TP arrival (Tele Mark / Fly Ultra cap-TP) for
-    // 500 ms, then release glide+pin -> normal physics drop us ON the mark
+    // 500 ms with PLAIN position sets (NO glide spoof — crash fix), then
+    // release -> normal physics drop us ON the mark
     if (g_tpPin)
     {
         long long tpMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2474,8 +2460,7 @@ void RunMarkTP()
                              .count();
         if (tpMs >= 500)
         {
-            g_tpPin = false;
-            g_forceGlideTP = false; // glide spoof off -> fall the last 7 m
+            g_tpPin = false; // pin off -> fall the last 7 m
         }
         else
         {
