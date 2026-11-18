@@ -75,8 +75,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_AUTOMARK = 6, FLTBTN_TELEMARK = 7, FLTBTN_DOWNKILL2 = 8, FLTBTN_GHOST = 9, FLTBTN_COUNT = 10 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_COUNT = 11 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -113,6 +113,7 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  - khadra
     ImVec4(1.00f, 0.82f, 0.25f, 1.00f), // STOPTIME - sfer (freeze)
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYOP    - 7amra (fly family, snippet)
+    ImVec4(0.75f, 1.00f, 0.20f, 1.00f), // FLYJUP   - chartreuse (jump = energy)
     ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (CHIBYA)
     ImVec4(0.25f, 0.60f, 1.00f, 1.00f), // TELEMARK - azr9 (teleport)
     // ---- lounat JDADE (user: "DIRE LWN JDADE B L BOTON") — 4 boutonat jdad ----
@@ -498,6 +499,9 @@ ImFont* Urbanist;
                 case FLTBTN_FLYOP:
                     DrawFloatingButton(i, oxorany("Fly Op"), &Vars.FlyOp);
                     break;
+                case FLTBTN_FLYJUP:
+                    DrawFloatingButton(i, oxorany("Fly Jump"), &Vars.FlyJump);
+                    break;
                 case FLTBTN_AUTOMARK:
                     DrawFloatingButton(i, oxorany("Auto Mark"), &Vars.AutoMark);
                     break;
@@ -577,11 +581,14 @@ ImFont* Urbanist;
                         ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, st11=AikInit, st12-15=strike gates, s>0=packets, c: cover always 0 (removed)
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime; // own option (user: bouhdo)
-                        if (ImGui::BeginTable("splitm", 3))
+                        if (ImGui::BeginTable("splitm", 4))
                         {
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Fly Op"), &Vars.FlyOp))
                                 gFltShow[FLTBTN_FLYOP] = Vars.FlyOp; // panel = latch dyal l'button f ecran
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Fly Jump"), &Vars.FlyJump))
+                                gFltShow[FLTBTN_FLYJUP] = Vars.FlyJump;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
@@ -633,7 +640,7 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
-                        ImGui::TextDisabled("Fly V2 / Fly Op / Stop Time / Ghost / Tele Mark");
+                        ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
@@ -663,6 +670,7 @@ ImFont* Urbanist;
             RunFly();
             RunFlyV2();
             RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
+            RunFlyJump(io.DeltaTime); // FLY JUMP (Elite HighJump: jump held + lift)
             RunStopTime();
             RunDownKillV2();
             RunGhost();
