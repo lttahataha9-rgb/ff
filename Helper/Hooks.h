@@ -40,7 +40,7 @@ struct Vars_t
     float khoangcach = 10.0f;
     // ---- ported from Android EliteXzp (the "Elite" project) ----
     bool FlyOp = {};       // FLY OP (user snippet "FLY HACK OP"): +0.10 m/frame rise (iOS port)
-    bool FlyJump = {};     // FLY JUMP (Elite HighJump): jump button held + lift ("ytl3ni")
+    bool FlyJump = {};     // FLY JUMP v2: HIS jump -> +2 m step ("ytl3ni darj")
     bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
     bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
     bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
@@ -1865,46 +1865,25 @@ void RunFlyOp(float dt)
     Transform_SetPosition(tf, pos);
 }
 
-// ---- FLY JUMP (Elite HighJumpLoop port — user: "zid m3a Fly Op Fly Jup") -----
-// Elite HighJump = JumpButton_OnBtnDown(jumpCtrl) EVERY frame (the game's OWN
-// jump button held -> the game jumps for real, physics-accepted) + pos.Y += 0.5
-// per frame lift. Dump-verified (iOS 1.132.X):
-//   UIInGameScene.m_JumpBtnCtrl            0x4D8  (UIHudJumpController)
-//   UIHudJumpController.OnBtnDown (override) RVA 0x3384BA4
-//   UIHudJumpController.OnBtnUp   (override) RVA 0x3384D60
-// OnBtnDown/Up resolved once + dladdr-checked vs get_position's image
-// (fail-closed: garbage -> no call). On OFF transition we release the button
-// once (OnBtnUp) so the jump state can't stick. Lift = Elite 0.5 f @60fps ->
-// dt-based 30 m/s (clamped dt = safety). Runs WITH Fly Op (same direction,
-// no fight) — user: "m3a Fly Op".
-static void *g_fjBtnDown = nullptr;
-static void *g_fjBtnUp = nullptr;
-static bool g_fjTried = false;
-static bool g_fjHeld = false;
-static void *FjResolve(uint64_t rva)
-{
-    void *cand = (void *)getRealOffset(rva);
-    Dl_info goodInfo{};
-    Dl_info candInfo{};
-    if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
-        dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase &&
-        goodInfo.dli_fbase == candInfo.dli_fbase)
-        return cand;
-    return nullptr;
-}
+// ---- FLY JUMP v2 (user: "bghit fly jump mnin nqez ytl3ni b darajat, --------
+// "machi kima darti nta") — v1 REMOVED (forced OnBtnDown every frame + smooth
+// 30 m/s = the game auto-jumping + continuous fly; user doesn't want that).
+// v2 = HIS OWN jump triggers ONE +2.0 m step ("ytl3ni darj"):
+//   jump onset = per-frame Y speed > 4 m/s (dt-based: same at 60 and 120 Hz;
+//   walking / slopes / elevators stay under it) while NOT already rising ->
+//   exactly ONE boost per jump (rising continues until the apex; falling or
+//   standing resets the detector, so the next jump gets the next step).
+// First frame after enable = baseline only (no spurious boost). No button is
+// forced anymore (nothing to release on OFF).
+static float g_fjLastY = 0.0f;
+static bool g_fjRising = false;
+static bool g_fjArmed = false;
 void RunFlyJump(float dt)
 {
     if (!Vars.FlyJump)
     {
-        if (g_fjHeld)
-        {
-            g_fjHeld = false;
-            // release the jump button once (OnBtnUp) — no stuck jump
-            void *scene = GetInGameUIScene();
-            void *ctrl = scene ? *(void **)((uintptr_t)scene + oxo("0x4D8")) : nullptr;
-            if (g_fjBtnUp && ctrl && (uintptr_t)ctrl > 0x10000)
-                ((void (*)(void *))g_fjBtnUp)(ctrl);
-        }
+        g_fjArmed = false;
+        g_fjRising = false;
         return;
     }
     void *match = game_sdk->Curent_Match();
@@ -1912,30 +1891,35 @@ void RunFlyJump(float dt)
         return;
     void *local = game_sdk->GetLocalPlayer(match);
     if (!local || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_fjArmed = false;
         return; // lobby / dead
-    if (!g_fjTried)
-    {
-        g_fjTried = true;
-        g_fjBtnDown = FjResolve(oxo("0x3384BA4")); // UIHudJumpController.OnBtnDown
-        g_fjBtnUp = FjResolve(oxo("0x3384D60"));   // UIHudJumpController.OnBtnUp
     }
-    void *scene = GetInGameUIScene();
-    void *ctrl = scene ? *(void **)((uintptr_t)scene + oxo("0x4D8")) : nullptr;
-    if (g_fjBtnDown && ctrl && (uintptr_t)ctrl > 0x10000)
-    {
-        ((void (*)(void *))g_fjBtnDown)(ctrl); // hold JUMP = game jumps for real
-        g_fjHeld = true;
-    }
-    // lift assist (Elite HighJumpLoop: pos.Y += 0.5/frame @60fps -> 30 m/s)
     void *tf = game_sdk->Component_GetTransform(local);
     if (!tf)
         return;
     Vector3 pos = game_sdk->get_position(tf);
     if (pos == Vector3::zero())
         return;
+    if (!g_fjArmed)
+    {
+        g_fjArmed = true;
+        g_fjLastY = pos.y;
+        g_fjRising = false;
+        return; // baseline frame — ma n-trigger-ich f l'enable
+    }
     float step = (dt > 0.0f && dt < 0.25f) ? dt : 0.016f;
-    pos.y += 30.0f * step;
-    Transform_SetPosition(tf, pos);
+    float dy = pos.y - g_fjLastY;
+    g_fjLastY = pos.y;
+    bool rising = (dy / step) > 4.0f; // jump launch speed (m/s), frame-rate safe
+    bool onset = rising && !g_fjRising; // flat/falling -> now rising = HE jumped
+    g_fjRising = rising;
+    if (onset)
+    {
+        pos.y += 2.0f; // ONE step per jump ("ytl3ni darj")
+        Transform_SetPosition(tf, pos);
+        g_fjLastY = pos.y; // next frame measured from the post-boost position
+    }
 }
 
 // ---- Stop Time (Elite: Speed Timer freeze) — SEPARATE again ---------------

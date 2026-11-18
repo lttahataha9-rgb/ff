@@ -675,7 +675,7 @@ ImFont* Urbanist;
             RunFly();
             RunFlyV2();
             RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
-            RunFlyJump(io.DeltaTime); // FLY JUMP (Elite HighJump: jump held + lift)
+            RunFlyJump(io.DeltaTime); // FLY JUMP v2: HIS jump -> +2 m step
             RunStopTime();
             RunDownKillV2();
             RunGhost();
