@@ -44,6 +44,12 @@ struct Vars_t
     bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
     float fuSpeed = 0.20f; // Fly Ultra: chhal ytla3 f wa7d tick (slider, default Elite 0.20)
     float fuMaxM = 7.0f;   // Fly Ultra: chhal mn mitro ytla3 (slider; l9as l'cap -> auto TP l'mark)
+    // ---- ported from Android EliteXzp round 2 (user: "DOWN KILL + V2, FLY FIX, GHOST") ----
+    bool DownKill = {};    // DOWN KILL: -1.8 m/f on me + all enemies in 200 m
+    bool DownKillV2 = {};  // DOWN KILL V2: smooth -0.4/f descent to -2.5 m, restore off
+    bool FixFly = {};      // FIX FLY (Elite Speed Timer V2): m_FixedDeltaTime curve
+    int fixFlyVal = 1;     // FIX FLY slider 1..20 (Elite seekbar 5992)
+    bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
 } Vars;
 
 class game_sdk_t
@@ -1972,6 +1978,386 @@ void RunStopTime()
             g_stPatched = false;
         }
         g_stDeltaShow = *pDelta;
+    }
+}
+
+// ---- DOWN KILL / DOWN KILL V2 (Elite DownKillLoop / DownKillV2Loop) ----------
+// V1 (user: "DOWN KILL + V2 kolhom"): kol frame rasi -1.8 m (ta7t l'ard) w
+// l'a3da2 li f 200 m zado -1.8 m (nfs l'order dyal Elite: dist qbel l'sub).
+// V2: nozol b shewwia -0.4 m/f l -2.5 m men groundY l9itah men l'awl, pin;
+// OFF -> 6 frames restore groundY + 0.5 (Elite dkv2ExitHold).
+// Lobby guard = get_MaxHP <= 0 (nfs l'pattern dyal l'run functions).
+static void DownKillPullEnemies(void *local, Vector3 myPos)
+{
+    void *m = game_sdk->Curent_Match();
+    if (!m)
+        return;
+    Dictionary<uint8_t *, void **> *players =
+        *(Dictionary<uint8_t *, void **> **)((long)m + oxo("0x148"));
+    if (!players)
+        return;
+    for (int u = 0; u < players->getSize(); u++)
+    {
+        void *e = players->getValues()[u];
+        if (!e || e == local)
+            continue;
+        if (game_sdk->get_MaxHP(e) <= 0 || game_sdk->get_IsDieing(e))
+            continue;
+        if (game_sdk->get_isLocalTeam(e))
+            continue;
+        void *etf = game_sdk->Component_GetTransform(e);
+        if (!etf)
+            continue;
+        Vector3 ep = game_sdk->get_position(etf);
+        if (ep == Vector3::zero())
+            continue;
+        if (Vector3::Distance(ep, myPos) > 200.0f)
+            continue;
+        ep.y -= 1.8f;
+        Transform_SetPosition(etf, ep);
+    }
+}
+
+void RunDownKill()
+{
+    if (!Vars.DownKill)
+        return;
+    void *m = game_sdk->Curent_Match();
+    if (!m)
+        return;
+    void *local = game_sdk->GetLocalPlayer(m);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+        return;
+    void *tf = game_sdk->Component_GetTransform(local);
+    if (!tf)
+        return;
+    Vector3 p = game_sdk->get_position(tf);
+    if (p == Vector3::zero())
+        return;
+    p.y -= 1.8f;
+    Transform_SetPosition(tf, p);
+    DownKillPullEnemies(local, p);
+}
+
+static bool g_dkv2Run = false;
+static float g_dkv2GroundY = 0.0f;
+static float g_dkv2CurY = 0.0f;
+static int g_dkv2Exit = 0;
+void RunDownKillV2()
+{
+    if (!Vars.DownKillV2)
+    {
+        if (g_dkv2Run)
+        {
+            g_dkv2Run = false;
+            g_dkv2Exit = 6;
+        }
+        if (g_dkv2Exit > 0)
+        {
+            g_dkv2Exit--;
+            void *m = game_sdk->Curent_Match();
+            void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
+            void *tf = (local && game_sdk->get_MaxHP(local) > 0)
+                           ? game_sdk->Component_GetTransform(local)
+                           : nullptr;
+            if (tf)
+            {
+                Vector3 p = game_sdk->get_position(tf);
+                if (p != Vector3::zero())
+                {
+                    p.y = g_dkv2GroundY + 0.5f;
+                    Transform_SetPosition(tf, p);
+                }
+            }
+        }
+        return;
+    }
+    void *m = game_sdk->Curent_Match();
+    if (!m)
+        return;
+    void *local = game_sdk->GetLocalPlayer(m);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_dkv2Run = false;
+        return;
+    }
+    void *tf = game_sdk->Component_GetTransform(local);
+    if (!tf)
+        return;
+    Vector3 p = game_sdk->get_position(tf);
+    if (p == Vector3::zero())
+        return;
+    if (!g_dkv2Run)
+    {
+        g_dkv2Run = true;
+        g_dkv2GroundY = p.y;
+        g_dkv2CurY = p.y;
+    }
+    float targetY = g_dkv2GroundY - 2.5f;
+    if (g_dkv2CurY > targetY)
+    {
+        g_dkv2CurY -= 0.40f;
+        if (g_dkv2CurY < targetY)
+            g_dkv2CurY = targetY;
+    }
+    p.y = g_dkv2CurY;
+    Transform_SetPosition(tf, p);
+    DownKillPullEnemies(local, p);
+}
+
+// ---- FIX FLY (Elite Speed Timer V2, floating label "FIX FLY") ----------------
+// Nefs l'campo dyal Stop Time (TimeService.m_FixedDeltaTime @ +0x2C) walakin b
+// value slider 1..20 -> anchor curve (Elite 5991/5992 FastFireMaxTimer):
+// v<=1 -> 0.033, 2 -> 0.035, 3 -> 0.038, 5 -> 0.045, 8 -> 0.058, 10 -> 0.070,
+// 13 -> 0.095, 16 -> 0.130, 20 -> 0.200 (linear lerp between anchors).
+// OFF -> restore l'orig. Stop Time wins (RunFixFly kaynaddi QBEL RunStopTime w
+// kayrje3 l'orig ila StopTime 3ndha — freeze owns the field).
+// Entry hardening nafs dyal RunStopTime: ZERO game-RVA call ila ma kaynsh
+// local player f match (entry crash fix).
+static bool g_fxPatched = false;
+static float g_fxOrig = 0.033f;
+static float g_fxShow = 0.0f; // FEATURES tab telemetry
+void RunFixFly()
+{
+    bool want = Vars.FixFly && !Vars.StopTime;
+    if (!want && !g_fxPatched)
+        return;
+    void *m = game_sdk->Curent_Match();
+    if (!m)
+        return;
+    void *local = game_sdk->GetLocalPlayer(m);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+        return;
+    static void *(*simTimerFn)() = nullptr;
+    static bool simTried = false;
+    if (!simTried)
+    {
+        simTried = true;
+        void *cand = (void *)getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
+        Dl_info goodInfo{};
+        Dl_info candInfo{};
+        if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+            dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase &&
+            goodInfo.dli_fbase == candInfo.dli_fbase)
+            simTimerFn = (void *(*)())cand;
+    }
+    if (!simTimerFn)
+        return;
+    void *ts = simTimerFn();
+    if (!ts)
+        return;
+    float *pDelta = (float *)((uintptr_t)ts + oxo("0x2C"));
+    if (want)
+    {
+        if (!g_fxPatched)
+        {
+            g_fxOrig = *pDelta;
+            g_fxPatched = true;
+        }
+        float v = (float)Vars.fixFlyVal;
+        float delta;
+        if (v <= 0.0f)
+            delta = 0.00001f;
+        else if (v <= 1.0f)
+            delta = 0.033f;
+        else
+        {
+            static const float ax[9] = {1.0f, 2.0f, 3.0f, 5.0f, 8.0f, 10.0f, 13.0f, 16.0f, 20.0f};
+            static const float ay[9] = {0.033f, 0.035f, 0.038f, 0.045f, 0.058f, 0.070f, 0.095f, 0.130f, 0.200f};
+            int idx = 8;
+            for (int i = 0; i < 9; i++)
+            {
+                if (v <= ax[i])
+                {
+                    idx = i;
+                    break;
+                }
+            }
+            int i0 = idx - 1;
+            if (i0 < 0)
+                i0 = 0;
+            float t = (ax[idx] != ax[i0]) ? (v - ax[i0]) / (ax[idx] - ax[i0]) : 0.0f;
+            if (t < 0.0f)
+                t = 0.0f;
+            if (t > 1.0f)
+                t = 1.0f;
+            delta = ay[i0] + (ay[idx] - ay[i0]) * t;
+        }
+        *pDelta = delta;
+        g_fxShow = delta;
+    }
+    else
+    {
+        if (g_fxPatched)
+        {
+            if (*pDelta != g_fxOrig)
+                *pDelta = g_fxOrig;
+            g_fxPatched = false;
+        }
+        g_fxShow = *pDelta;
+    }
+}
+
+// ---- GHOST (Elite Ghost Hack V4, floating label "GHOST HACK") ----------------
+// iOS dump-verified (1.132.X):
+//   Player.MainCameraTransform        0x3E8
+//   Player.IIPBIDIBJDK (root node)    0x6C8  (ITransformNode)
+//   Player.GBJCJJNPPEC (physx)        0x1D48 (GFLBFKKDAMK)
+//     -> MovingDirection 0x28 / FallingDirection 0x34 / VSpeed 0x40 / HSpeed 0x44
+//       (field order nefs dyal Android: 2 Vector3 + 2 float)
+//   GCommon.TransformNode.get_transform 0x6B4964C
+//   Player.get_WaitForForceSync        0x5636F20 (Elite hook_get_WaitForForceSync
+//     -> if GHOSTMODE_ENABLED() return true; dladdr-validated MSHookFunction)
+// Android-only raw offsets (GhostHackFlag 0x548 / GhostPosition 0x12DC /
+// net-shadow 0x18C8 + sub-offsets / MoveXYZ chain) don't match the iOS dump
+// layout (0x548 iOS = uint GetCount) -> SKIPPED (fail-closed: dump-verified ghir).
+static bool g_ghRun = false;
+static float g_ghGroundY = 0.0f;
+static float g_ghCamOff = 1.6f;
+static bool (*g_origWaitSync)(void *) = nullptr;
+static bool Hook_WaitForForceSync(void *p)
+{
+    if (Vars.Ghost)
+        return true; // Elite: GHOSTMODE_ENABLED() -> true (kol l'players)
+    if (g_origWaitSync)
+        return g_origWaitSync(p);
+    return false;
+}
+static void InstallGhostHook()
+{
+    static bool tried = false;
+    if (tried)
+        return;
+    tried = true;
+    void *cand = (void *)getRealOffset(0x5636F20);
+    Dl_info goodInfo{};
+    Dl_info candInfo{};
+    if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+        dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase &&
+        goodInfo.dli_fbase == candInfo.dli_fbase)
+        MSHookFunction(cand, (void *)Hook_WaitForForceSync, (void **)&g_origWaitSync);
+}
+// root: Player.IIPBIDIBJDK (ITransformNode) -> GCommon.TransformNode.get_transform
+static void *GhostRootTf(void *player)
+{
+    static void *(*getTf)(void *) = nullptr;
+    static bool tried = false;
+    if (!tried)
+    {
+        tried = true;
+        void *cand = (void *)getRealOffset(oxo("0x6B4964C"));
+        Dl_info goodInfo{};
+        Dl_info candInfo{};
+        if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+            dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase &&
+            goodInfo.dli_fbase == candInfo.dli_fbase)
+            getTf = (void *(*)(void *))cand;
+    }
+    if (!getTf)
+        return nullptr;
+    void *node = *(void **)((uintptr_t)player + oxo("0x6C8"));
+    if (!node || (uintptr_t)node < 0x10000)
+        return nullptr;
+    void *t = getTf(node);
+    return ((uintptr_t)t > 0x10000) ? t : nullptr;
+}
+
+void RunGhost()
+{
+    if (!Vars.Ghost)
+    {
+        if (g_ghRun)
+        {
+            g_ghRun = false;
+            // Elite restore: groundY + 0.5 (10 repeated sets + root)
+            void *m = game_sdk->Curent_Match();
+            void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
+            void *tf = (local && game_sdk->get_MaxHP(local) > 0)
+                           ? game_sdk->Component_GetTransform(local)
+                           : nullptr;
+            if (tf)
+            {
+                Vector3 p = game_sdk->get_position(tf);
+                if (p != Vector3::zero())
+                {
+                    p.y = g_ghGroundY + 0.5f;
+                    for (int i = 0; i < 10; i++)
+                        Transform_SetPosition(tf, p);
+                    void *rt = GhostRootTf(local);
+                    if (rt)
+                        for (int i = 0; i < 10; i++)
+                            Transform_SetPosition(rt, p);
+                }
+            }
+        }
+        return;
+    }
+    InstallGhostHook();
+    void *m = game_sdk->Curent_Match();
+    if (!m)
+    {
+        g_ghRun = false;
+        return;
+    }
+    void *local = game_sdk->GetLocalPlayer(m);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_ghRun = false;
+        return;
+    }
+    void *tf = game_sdk->Component_GetTransform(local);
+    if (!tf)
+        return;
+    Vector3 p = game_sdk->get_position(tf);
+    if (p == Vector3::zero())
+        return;
+    if (!g_ghRun)
+    {
+        g_ghRun = true;
+        g_ghGroundY = p.y;
+        g_ghCamOff = 1.6f;
+        void *cam0 = *(void **)((uintptr_t)local + oxo("0x3E8"));
+        if (cam0)
+        {
+            Vector3 cp = game_sdk->get_position(cam0);
+            if (cp != Vector3::zero())
+            {
+                g_ghCamOff = cp.y - g_ghGroundY;
+                if (g_ghCamOff == 0.0f)
+                    g_ghCamOff = 1.6f;
+            }
+        }
+    }
+    Vector3 ug = p;
+    ug.y = g_ghGroundY - 2.5f;
+    // freeze physX (GFLBFKKDAMK: dirs 0x28/0x34, speeds 0x40/0x44) — 3 cycles
+    void *px = *(void **)((uintptr_t)local + oxo("0x1D48"));
+    if (px && (uintptr_t)px > 0xFFFF)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            *(float *)((uintptr_t)px + oxo("0x40")) = 0.0f;
+            *(float *)((uintptr_t)px + oxo("0x44")) = 0.0f;
+            *(Vector3 *)((uintptr_t)px + oxo("0x34")) = Vector3(0, 0, 0);
+            *(Vector3 *)((uintptr_t)px + oxo("0x28")) = Vector3(0, 0, 0);
+        }
+    }
+    for (int i = 0; i < 5; i++)
+        Transform_SetPosition(tf, ug);
+    void *rt = GhostRootTf(local);
+    if (rt)
+        for (int i = 0; i < 5; i++)
+            Transform_SetPosition(rt, ug);
+    // camera stays at the surface (Elite ghCamOffsetY)
+    void *cam = *(void **)((uintptr_t)local + oxo("0x3E8"));
+    if (cam)
+    {
+        Vector3 cp = game_sdk->get_position(cam);
+        if (cp != Vector3::zero())
+        {
+            cp.y = g_ghGroundY + g_ghCamOff;
+            Transform_SetPosition(cam, cp);
+        }
     }
 }
 

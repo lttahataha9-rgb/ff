@@ -75,8 +75,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYULTRA = 5, FLTBTN_AUTOMARK = 6, FLTBTN_TELEMARK = 7, FLTBTN_COUNT = 8 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYULTRA = 5, FLTBTN_AUTOMARK = 6, FLTBTN_TELEMARK = 7, FLTBTN_DOWNKILL = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_FIXFLY = 10, FLTBTN_GHOST = 11, FLTBTN_COUNT = 12 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -115,6 +115,11 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYULTRA - 7amra (fly family)
     ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (CHIBYA)
     ImVec4(0.25f, 0.60f, 1.00f, 1.00f), // TELEMARK - azr9 (teleport)
+    // ---- lounat JDADE (user: "DIRE LWN JDADE B L BOTON") — 4 boutonat jdad ----
+    ImVec4(1.00f, 0.42f, 0.70f, 1.00f), // DOWNKILL - wardo (pink)
+    ImVec4(0.13f, 0.88f, 0.80f, 1.00f), // DOWNKILL2- ferrouj (teal)
+    ImVec4(0.75f, 1.00f, 0.20f, 1.00f), // FIXFLY   - chartreuse (sfer-khadra)
+    ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -501,6 +506,18 @@ ImFont* Urbanist;
                 case FLTBTN_TELEMARK:
                     DrawFloatingButton(i, oxorany("Tele Mark"), &Vars.TeleMark);
                     break;
+                case FLTBTN_DOWNKILL:
+                    DrawFloatingButton(i, oxorany("Down Kill"), &Vars.DownKill);
+                    break;
+                case FLTBTN_DOWNKILL2:
+                    DrawFloatingButton(i, oxorany("Down Kill V2"), &Vars.DownKillV2);
+                    break;
+                case FLTBTN_FIXFLY:
+                    DrawFloatingButton(i, oxorany("Fix Fly"), &Vars.FixFly);
+                    break;
+                case FLTBTN_GHOST:
+                    DrawFloatingButton(i, oxorany("Ghost"), &Vars.Ghost);
+                    break;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
@@ -594,8 +611,22 @@ ImFont* Urbanist;
                         // lya f chhal ytl3 w chhal mn mitro ytl3")
                         ImGui::SliderFloat(oxorany("FU speed / tick"), &Vars.fuSpeed, 0.02f, 1.00f, "%.2f");
                         ImGui::SliderFloat(oxorany("FU metres"), &Vars.fuMaxM, 1.0f, 100.0f, "%.1f m");
-                        ImGui::TextDisabled("Stop Time = freeze (bouhdo) / Fly Ultra = climb -> cap TP"); // user: kolchi bouhdo
-                        ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
+                        // ported round 2 (Elite): DOWN KILL V1/V2 + FIX FLY + GHOST
+                        if (ImGui::BeginTable("splitn", 2))
+                        {
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Button Down Kill"), &Vars.DownKill)) gFltShow[FLTBTN_DOWNKILL] = Vars.DownKill;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Button Down V2"), &Vars.DownKillV2)) gFltShow[FLTBTN_DOWNKILL2] = Vars.DownKillV2;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Button Fix Fly"), &Vars.FixFly)) gFltShow[FLTBTN_FIXFLY] = Vars.FixFly;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Button Ghost"), &Vars.Ghost)) gFltShow[FLTBTN_GHOST] = Vars.Ghost;
+                        }
+                        ImGui::EndTable();
+                        ImGui::SliderInt(oxorany("FIX FLY speed (1-20)"), &Vars.fixFlyVal, 1, 20);
+                        ImGui::TextDisabled("Stop Time = freeze / Down = ta7t l'ard / Ghost = underground");
+                        ImGui::Text("Mark:%d ST:%.5f FX:%.5f", g_markDbg, g_stDeltaShow, g_fxShow); // bits 1 tele / 2 auto / 4 pin, ST/FX = m_FixedDeltaTime
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem(("SETTINGS"))) {
@@ -644,7 +675,11 @@ ImFont* Urbanist;
             RunFly();
             RunFlyV2();
             RunFlyUltra(io.DeltaTime);
+            RunFixFly(); // QBEL RunStopTime: Stop Time wins m_FixedDeltaTime
             RunStopTime();
+            RunDownKill();
+            RunDownKillV2();
+            RunGhost();
             RunMarkTP();
             RunTelekill();
             StartAimkill();
