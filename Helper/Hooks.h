@@ -2207,36 +2207,20 @@ void RunFixFly()
 //       (field order nefs dyal Android: 2 Vector3 + 2 float)
 //   GCommon.TransformNode.get_transform 0x6B4964C
 //   Player.get_WaitForForceSync        0x5636F20 (Elite hook_get_WaitForForceSync
-//     -> if GHOSTMODE_ENABLED() return true; dladdr-validated MSHookFunction)
+//     -> if GHOSTMODE_ENABLED() return true) — HOOK SKIPPED, fail-closed:
+//     hooking needs MSHookFunction -> links libsubstrate.dylib, which does NOT
+//     exist inside an ESign-injected IPA (iOS 26 / iPhone 11, no jailbreak):
+//     dyld can't find it at app launch -> CRASH (user: "knht dylib mn ESign
+//     f l'ipa kycrashi"). Substrate is now 100% removed from this project
+//     (Makefile LIBRARIES + all MSHookFunction calls). Ghost keeps working
+//     WITHOUT the hook: the underground/physx/camera pin below re-asserts the
+//     position every frame client-side (own position = client authoritative).
 // Android-only raw offsets (GhostHackFlag 0x548 / GhostPosition 0x12DC /
 // net-shadow 0x18C8 + sub-offsets / MoveXYZ chain) don't match the iOS dump
 // layout (0x548 iOS = uint GetCount) -> SKIPPED (fail-closed: dump-verified ghir).
 static bool g_ghRun = false;
 static float g_ghGroundY = 0.0f;
 static float g_ghCamOff = 1.6f;
-static bool (*g_origWaitSync)(void *) = nullptr;
-static bool Hook_WaitForForceSync(void *p)
-{
-    if (Vars.Ghost)
-        return true; // Elite: GHOSTMODE_ENABLED() -> true (kol l'players)
-    if (g_origWaitSync)
-        return g_origWaitSync(p);
-    return false;
-}
-static void InstallGhostHook()
-{
-    static bool tried = false;
-    if (tried)
-        return;
-    tried = true;
-    void *cand = (void *)getRealOffset(0x5636F20);
-    Dl_info goodInfo{};
-    Dl_info candInfo{};
-    if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
-        dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase &&
-        goodInfo.dli_fbase == candInfo.dli_fbase)
-        MSHookFunction(cand, (void *)Hook_WaitForForceSync, (void **)&g_origWaitSync);
-}
 // root: Player.IIPBIDIBJDK (ITransformNode) -> GCommon.TransformNode.get_transform
 static void *GhostRootTf(void *player)
 {
@@ -2292,7 +2276,7 @@ void RunGhost()
         }
         return;
     }
-    InstallGhostHook();
+    // (no hook: substrate removed for ESign/IPA — see block comment above)
     void *m = game_sdk->Curent_Match();
     if (!m)
     {

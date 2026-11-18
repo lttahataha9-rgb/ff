@@ -23,6 +23,8 @@ ifeq ($(IGNORE_WARNINGS),1)
 endif
 $(TWEAK_NAME)_FRAMEWORKS =  UIKit Foundation Security QuartzCore CoreGraphics CoreText  AVFoundation Accelerate GLKit SystemConfiguration GameController
 $(TWEAK_NAME)_FILES = ImGuiDrawView.mm $(wildcard Esp/*.mm) $(wildcard Esp/*.m) $(wildcard IMGUI/*.cpp) $(wildcard IMGUI/*.mm) $(wildcard Hosts/*.m)
-$(TWEAK_NAME)_LIBRARIES = substrate
+# NO -lsubstrate: MSHookFunction/libsubstrate.dylib does not exist inside an
+# ESign-injected IPA (iOS 26, no jailbreak) -> dyld fails at launch -> CRASH.
+# All hooks removed; features are field/position writes only.
 
 include $(THEOS_MAKE_PATH)/tweak.mk
