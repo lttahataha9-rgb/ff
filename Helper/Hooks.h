@@ -1998,10 +1998,43 @@ static Vector3 MarkedLoc()
     return *(Vector3 *)((uintptr_t)markCtrl + oxo("0xB0"));
 }
 
+// ---- forceGlideTP (Elite): spoof IsFoldWingGliding for the LOCAL player ----
+// around a teleport so the movement system accepts the new position instead
+// of ground-clamping/snapping it back to 0 m (Elite MasterBool.forceGlideTP +
+// hook_IsFoldWingGliding). dump.cs: COW.GamePlay.Player.IsFoldWingGliding()
+// RVA 0x570D98C. Hook body = plain ptr compares ONLY (no game calls) so it is
+// safe even before game_sdk init.
+static bool g_forceGlideTP = false;
+static void *g_glideLocal = nullptr;
+static bool (*g_origFoldWingGliding)(void *) = nullptr;
+static bool Hook_FoldWingGliding(void *player)
+{
+    if (g_forceGlideTP && player && player == g_glideLocal)
+        return true; // Elite: forceGlideTP && player == local
+    if (g_origFoldWingGliding)
+        return g_origFoldWingGliding(player);
+    return false;
+}
+static void InstallGlideTPHook()
+{
+    static bool tried = false;
+    if (tried)
+        return;
+    tried = true;
+    HOOK(0x570D98C, Hook_FoldWingGliding, g_origFoldWingGliding);
+}
+
+// shared +7 m pin (Tele Mark + Fly Ultra cap-TP): hold the arrival spot for
+// 500 ms so clamp/knockback cannot eat the 7 m, then release -> the game
+// drops us ON the mark (user: "ay blas n teleporta liha khaso ytipini
+// fou9ha b 7 m").
+static bool g_tpPin = false;
+static Vector3 g_tpPinPos;
+static std::chrono::steady_clock::time_point g_tpPinStart;
+
 // ---- TeleportToMark (Elite ExecuteTeleMark sequence) ------------------------
-// hop +50 then drop onto the mark from +7 m (user: "y-tipinni fouqha nichan
-// b 7m" = exactly 7 m above the mark). Elite wraps both sets in forceGlideTP
-// (glide spoof hook - not portable here), so we do a clean 7 m drop instead.
+// hop +50 then arrive exactly +7 m above the target (mark), HOLD 500 ms
+// (glide spoof + per-frame pin) then release -> drop onto the mark.
 static bool TeleportToMark(Vector3 target)
 {
     void *match = game_sdk->Curent_Match();
@@ -2016,12 +2049,18 @@ static bool TeleportToMark(Vector3 target)
     Vector3 pos = game_sdk->get_position(tf);
     if (pos == Vector3::zero())
         return false;
+    InstallGlideTPHook();
+    g_glideLocal = local;
+    g_forceGlideTP = true; // movement system accepts the hop/TP (Elite)
     Vector3 up = pos;
     up.y += 50.0f;
     Transform_SetPosition(tf, up); // Elite: hop first (anti ground-clamp)
     Vector3 dst = target;
     dst.y += 7.0f;
     Transform_SetPosition(tf, dst);
+    g_tpPin = true; // hold +7 m for 500 ms, then drop onto the mark
+    g_tpPinPos = dst;
+    g_tpPinStart = std::chrono::steady_clock::now();
     return true;
 }
 
@@ -2039,6 +2078,28 @@ static int g_markDbg = 0;
 void RunMarkTP()
 {
     g_markDbg = 0;
+
+    // shared +7 m pin: hold the TP arrival (Tele Mark / Fly Ultra cap-TP) for
+    // 500 ms, then release glide+pin -> normal physics drop us ON the mark
+    if (g_tpPin)
+    {
+        long long tpMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - g_tpPinStart)
+                             .count();
+        if (tpMs >= 500)
+        {
+            g_tpPin = false;
+            g_forceGlideTP = false; // glide spoof off -> fall the last 7 m
+        }
+        else
+        {
+            void *tpMatch = game_sdk->Curent_Match();
+            void *tpLocal = tpMatch ? game_sdk->GetLocalPlayer(tpMatch) : nullptr;
+            void *tpTf = tpLocal ? game_sdk->Component_GetTransform(tpLocal) : nullptr;
+            if (tpTf)
+                Transform_SetPosition(tpTf, g_tpPinPos); // glued at +7 m
+        }
+    }
 
     // ---- Tele Mark (Elite ExecuteTeleMark, one-shot per toggle) ----
     if (!Vars.TeleMark)
