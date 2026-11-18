@@ -42,6 +42,8 @@ struct Vars_t
     bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
     bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
     bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
+    float fuSpeed = 0.20f; // Fly Ultra: chhal ytla3 f wa7d tick (slider, default Elite 0.20)
+    float fuMaxM = 7.0f;   // Fly Ultra: chhal mn mitro ytla3 (slider; l9as l'cap -> auto TP l'mark)
 } Vars;
 
 class game_sdk_t
@@ -1323,25 +1325,26 @@ static bool AikIsValidGun(void *weapon)
     return true;
 }
 
-// isEnemyInRangeWeapon — range rule copied from Android: r <= 2 means the
-// weapon reports km-ish units (r*250), otherwise metres, default 120 m.
+// isEnemyInRangeWeapon — st=8 fix: the OLD zexisyy RAW check restored
+// (Distance <= the weapon's raw range): no Android unit guess (r<=2 *250)
+// and no 120 m default — that rule refused shots the old build accepted.
 static bool AikInRange(void *local, void *enemy, void *weapon)
 {
     Vector3 h1, h2;
     if (!AikHeadPos(local, &h1) || !AikHeadPos(enemy, &h2))
         return false;
-    float maxRange = 120.0f;
-    float r = aik.GetRange(weapon);
-    if (r > 0.0f)
-        maxRange = (r <= 2.0f) ? (r * 250.0f) : r;
-    return Vector3::Distance(h1, h2) <= maxRange;
+    float range = aik.GetRange(weapon);
+    if (range <= 0.0f)
+        return false; // old: Distance > 0 range = always refuse
+    return Vector3::Distance(h1, h2) <= range;
 }
 
 // --- AimKill Send v2 (gaps from Android port) --------------------------------
 // Telemetry: st = last StartAimkill gate (1 ran / 2 no-match / 3 not-live /
 // 4 no-enemy / 5 enemy-fail / 6 no-gun / 7 not-a-gun / 8 out-of-range /
-// 9 SENT / 10 no-pool-or-head / 11 strike refused), n = 1 when a target is
-// acquired, s = packets sent (Elite AimkillSendStrike path).
+// 9 SENT / 10 no-pool-or-head / 11 AikInit fail / 12 no-checkParams /
+// 13 no-damage-msg / 14 strike gate / 15 no-TimeService), n = 1 when a
+// target is acquired, s = packets sent (Elite AimkillSendStrike path).
 // Shown in the FEATURES tab.
 static int aikDbgSt = 0, aikDbgN = 0, aikDbgSent = 0;
 // cover state (SmartCoverKill, Elite port): 0 none / 1 attempt / 2 pulled
@@ -1472,57 +1475,124 @@ static void AikShuffleValidate(void *weapon, void *params, uint32_t seedEnc)
 }
 
 // AimkillSendStrike — fill the local player's hit-object scratch, then build
-// and send the damage packet. Field order/semantics mirror the Android body.
+// and send the packet. Restores the proven-old zexisyy behaviors (st=11 fix):
+// weapon+0x5F0 reset, baseDamage from weapon+0xA8 (<100 -> 999), full
+// AimTarget pool fill (the old build only wrote 0x18/0x20 here), local
+// damage-info writes, StartFiring before CheckParams, CheckParams 2nd arg =
+// the ENEMY (NOT the GetAiming result — the old code resolved the aiming
+// entity and never gated on it), and WeaponDoSomething/Validate (0x5C2B3F0)
+// called UNCONDITIONALLY — the Android shuffle-validate gate is fail-closed
+// on iOS (il2cpp dlsym), so it never ran and the strike stayed refused.
+// Packet field values stay Elite-verbatim; the hit hash still stores BEFORE
+// CheckParametros (Android order L2827->2828).
+// st set here: 7 bad baseDamage / 12 no-checkParams / 13 no-damage-msg /
+// 14 strike gate (dead / no LOS / no head) / 15 no-TimeService.
 static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos, void *target)
 {
-    if (!local || !weapon || !hitInfo || !target)
-        return false;
-    if (game_sdk->get_IsDieing(target) || game_sdk->GetHp(target) <= 0)
-        return false;
+    if (!local || !weapon || !hitInfo || !target) { aikDbgSt = 14; return false; }
+    if (game_sdk->get_IsDieing(target) || game_sdk->GetHp(target) <= 0) { aikDbgSt = 14; return false; }
     // raycast LOS = Android isVisible_Aimbot semantics (tanghinh::isVisible =
     // nefs Physics_Raycast layer12 li khdem f ESP — get_isVisible flag = ghlt
     // w mab9ach f candidates zada, Android candidate loop ma 3ndoch visibility)
-    if (!tanghinh::isVisible(target))
-        return false;
+    if (!tanghinh::isVisible(target)) { aikDbgSt = 14; return false; }
 
     void *headCollider = aik.HeadCollider(target);
-    if (!headCollider)
-        return false;
+    if (!headCollider) { aikDbgSt = 14; return false; }
     void *headGameObject = aik.GameObjectOf(headCollider);
-    if (!headGameObject)
-        return false;
+    if (!headGameObject) { aikDbgSt = 14; return false; }
 
     // CGKJLKPMGDJ: JHAINOBIFMA @0x18 (GameObject), JINDNOFABKB @0x20 (collider)
     *(void **)((uintptr_t)hitInfo + 0x18) = headGameObject;
     *(void **)((uintptr_t)hitInfo + 0x20) = headCollider;
 
-    void *aiming = aik.GetAiming(local, hitInfo); // Player.JGIEOGCGFEP
-    if (!aiming)
-        return false;
+    // old zexisyy: clear the weapon fire-state field before CheckParams
+    *(float *)((uintptr_t)weapon + 0x5F0) = 0.0f;
 
-    int baseDamage = aik.GetDamage(weapon);
-    if (baseDamage <= 0)
-        baseDamage = 99;
+    // old zexisyy: baseDamage straight off the weapon (+0xA8); 0 = not a gun
+    // (old st=7), <100 -> 999 so the packet lands as a kill
+    int32_t baseDamage = *(int32_t *)((uintptr_t)weapon + 0xA8);
+    if (baseDamage == 0) { aikDbgSt = 7; return false; }
+    if (baseDamage < 100) baseDamage = 999;
     uint32_t weaponID = aik.GetWeaponID(weapon);
 
+    // old zexisyy: full hit-object pool fill from the enemy's AimTarget —
+    // HitLocation/RayDir/StartPos/Distance/Flags feed the CheckParametros
+    // list, and writing only 0x18/0x20 left that list empty.
+    Vector3 enemyHead;
+    if (!AikHeadPos(target, &enemyHead))
+        enemyHead = firePos;
+    float dist = Vector3::Distance(firePos, enemyHead);
+    Vector3 direction = {0, 0, 0};
+    if (dist > 0.0001f)
+        direction = (enemyHead - firePos) * (1.0f / dist);
+    void *aimTarget = *(void **)((uintptr_t)target + 0x738); // Player.AimTarget
+    if (aimTarget)
+    {
+        char *pool = (char *)hitInfo;
+        *(void **)(pool + 0x18) = aik.GameObjectOf(aimTarget);
+        *(void **)(pool + 0x20) = aimTarget;
+        *(Vector3 *)(pool + 0x28) = enemyHead;   // HitLocation
+        *(Vector3 *)(pool + 0x34) = direction;   // RayDir
+        *(Vector3 *)(pool + 0x40) = direction;   // RayDir2
+        *(Vector3 *)(pool + 0x4C) = firePos;     // StartPos
+        *(int32_t *)(pool + 0x58) = baseDamage;  // Damage
+        *(float *)(pool + 0x5C) = dist;          // Distance
+        *(int32_t *)(pool + 0x60) = 1;           // Flags60
+        *(int32_t *)(pool + 0x64) = 1;           // Flags64
+        *(bool *)(pool + 0x70) = true;           // Flag70
+        *(bool *)(pool + 0x71) = true;           // Flag71
+    }
+
+    // old zexisyy: local damage-info writes (HitPart / Weapon / DamageValue /
+    // AttackerID) — derived from the local player's attributes chain EVERY
+    // call (old runtime behavior: no cache -> no stale ptr across matches)
+    void *dmgInfo = nullptr;
+    {
+        void *attrs = *(void **)((uintptr_t)local + 0x768);    // Player.Attributes
+        if (attrs)
+        {
+            void *dmod = *(void **)((uintptr_t)attrs + 0x318); // DamageModule
+            if (dmod)
+                dmgInfo = *(void **)((uintptr_t)dmod + 0x10);  // DamageInfo
+        }
+    }
+    if (dmgInfo)
+    {
+        *(int32_t *)((uintptr_t)dmgInfo + 0x14) = 1;                    // HitPart = head
+        *(void **)((uintptr_t)dmgInfo + 0x40) = weapon;                 // Weapon
+        *(int32_t *)((uintptr_t)dmgInfo + 0x10) = baseDamage;           // DamageValue
+        *(AikPlayerId *)((uintptr_t)dmgInfo + 0x28) =
+            *(AikPlayerId *)((uintptr_t)local + 0x408);                 // AttackerID = local PlayerID
+    }
+
     void *timeService = aik.TimeService();
-    if (!timeService)
-        return false;
+    if (!timeService) { aikDbgSt = 15; return false; }
     void *msg = aik.MakeDamageMsg(local); // -> EBEDJLFHHHP
-    if (!msg)
-        return false;
+    if (!msg) { aikDbgSt = 13; return false; }
 
     // Android order: ComputeAndStoreHashExact BEFORE CheckParametros (L2827→2828)
     uint32_t enemyId = aik.IdToU32(aik.GetPlayerID(target));
     AikStoreHitHash(weapon, target, *(uint32_t *)((uintptr_t)timeService + 0x20));
 
-    void *checkParams = aik.CheckParams(weapon, aiming, headCollider, false, (void *)0);
-    if (!checkParams)
-        return false;
-    // Android: shuffle-validate right after CheckParametros (L2836-2845)
-    AikShuffleValidate(weapon, checkParams, enemyId); // seedEnc = IdToU32(enemyID)
-
     aik.StartFiring(local, weapon);
+
+    // old: the aiming entity is resolved but NEVER gates the strike (aimkill
+    // works off-aim), and CheckParams takes the ENEMY as its 2nd argument
+    void *aiming = aik.GetAiming(local, hitInfo); // Player.JGIEOGCGFEP
+    (void)aiming;
+    void *checkParams = aik.CheckParams(weapon, target, headCollider, false, (void *)0);
+    if (!checkParams)
+    {
+        aik.StopFire(local, weapon);
+        aikDbgSt = 12;
+        return false;
+    }
+    // old zexisyy: WeaponDoSomething/Validate called UNCONDITIONALLY (the
+    // Android EnableShuffleParams gate never fired on iOS -> strike refused)
+    static void (*wValidate)(void *, void *, uint32_t) =
+        (void (*)(void *, void *, uint32_t))getRealOffset(oxo("0x5C2B3F0"));
+    if (wValidate)
+        wValidate(weapon, checkParams, enemyId); // seedEnc = IdToU32(enemyID)
 
     // EBEDJLFHHHP fields — same type order as the Android message struct:
     // attacker/hp/zero/damage|part/victim/weapon/uniq/part/tick/...
@@ -1754,20 +1824,28 @@ static void *g_dmg99 = nullptr;
 // RELATIVE climb: pos.y + 0.2 per Elite tick (~35 ms) from the position the
 // server actually has us at every frame. The old absolute g_fuY fought the
 // server's position correction (rose ~2 m then vibrated). Small step = "itl3
-// b chwya". Cap 7 m from activation then self-hold ("ytl3 7m w y7ebbes
-// rasso"). X/Z stay free. OFF / lobby / dead -> re-arm from current height.
+// b chwya". Cap = activation Y + Vars.fuMaxM (slider) then AUTO TP to my
+// mark at the cap ("ywsel l'cap -> teleport l'mark"). X/Z stay free. OFF /
+// lobby / dead -> re-arm from the current height.
+// mark helpers are defined further down — the cap-TP below needs them
+static Vector3 MarkedLoc();
+static bool TeleportToMark(Vector3 target);
+
 static bool g_fuArmed = false;
+static bool g_fuTped = false; // cap reached + auto-TP done (one climb per toggle)
 static float g_fuBase = 0.0f; // activation Y (cap reference)
 void RunFlyUltra(float dt)
 {
     if (!Vars.FlyUltra)
     {
         g_fuArmed = false;
+        g_fuTped = false;
         return;
     }
     if (Vars.Flyingtest)
     {
         g_fuArmed = false;
+        g_fuTped = false;
         return; // FlyV2 owns Y (panel unchecks Fly Ultra too - no 2 flies fighting)
     }
 
@@ -1780,7 +1858,8 @@ void RunFlyUltra(float dt)
     if (game_sdk->get_MaxHP(local) <= 0)
     {
         g_fuArmed = false;
-        return; // lobby / dead
+        g_fuTped = false;
+        return; // lobby / dead (new life -> re-arm a fresh climb)
     }
     void *tf = game_sdk->Component_GetTransform(local);
     if (!tf)
@@ -1788,16 +1867,34 @@ void RunFlyUltra(float dt)
     Vector3 pos = game_sdk->get_position(tf);
     if (pos == Vector3::zero())
         return;
+    if (g_fuTped)
+        return; // climb + cap-TP already done this toggle (idle at the mark)
     if (!g_fuArmed)
     {
         g_fuBase = pos.y;
         g_fuArmed = true;
     }
+    // 2 sliders (user: "2 khtouta: chhal ytl3 f wa7d tick w chhal mn mitro")
+    float spd = Vars.fuSpeed;
+    if (spd < 0.01f) spd = 0.01f;
+    float maxM = Vars.fuMaxM;
+    if (maxM < 1.0f) maxM = 1.0f;
     // relative step: climb from where the server actually has us (post-correction)
-    float next = pos.y + 0.20f * (dt / 0.035f); // Elite ApplyFlyHackV2: +0.20f per ~35 ms tick
-    float fuCap = g_fuBase + 7.0f; // user: "ytl3 7m w y7ebbes rasso" (hold at 7 m)
-    if (next > fuCap)
-        next = fuCap; // self-stop at the cap
+    float next = pos.y + spd * (dt / 0.035f); // Elite ApplyFlyHackV2: +0.20f per ~35 ms tick
+    float fuCap = g_fuBase + maxM;            // cap = activation Y + fuMaxM metres
+    if (next >= fuCap)
+    {
+        // cap reached -> AUTO TP exactly 7 m above my mark (TeleportToMark).
+        // No mark = fail-closed: hold at the cap until one exists.
+        Vector3 mk = MarkedLoc();
+        if (mk != Vector3::zero() && TeleportToMark(mk))
+        {
+            g_fuTped = true; // one climb + TP per toggle
+            g_fuArmed = false;
+            return; // ma n-overwrite-ich l'TP b l'pos l'9dim
+        }
+        next = fuCap; // hold at the cap
+    }
     pos.y = next;
     Transform_SetPosition(tf, pos);
 }
@@ -2129,8 +2226,10 @@ static bool SmartCoverKill(void *enemy)
 
 // ==== StartAimkill — Elite StartAimKillSend / AimkillSendStrike path ==============
 // st: 1 ran / 2 no-match / 3 not-live / 4 no-enemy / 5 enemy-fail / 6 no-gun /
-// 7 not-a-gun / 8 out-of-range / 9 SENT / 10 no-pool-or-head / 11 strike
-// refused (AikInit fail or AikStrike internal).  n: 1 = target acquired.
+// 7 not-a-gun (or weapon baseDamage 0) / 8 out-of-range / 9 SENT /
+// 10 no-pool-or-head / 11 AikInit fail (or strike refused w/o a code) /
+// 12 no-checkParams / 13 no-damage-msg / 14 strike gate (dead/LOS/head) /
+// 15 no-TimeService.  n: 1 = target acquired.
 // s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
 void StartAimkill() {
     if (!Vars.AimKillSend) return;
@@ -2178,10 +2277,9 @@ void StartAimkill() {
     // RealDamageValue=HP / DamageValue=baseDamage|(1<<24) / back-area on ->
     // StopFire. AikStrike sends the packet itself and does aikDbgSent++.
     int hpBefore = game_sdk->GetHp(enemy);
-    if (!AikStrike(local, weapon, objectPool, localHead, enemy)) {
-        aikDbgSt = 11; // strike refused internally (fail-closed)
-        return;
-    }
+    aikDbgSt = 11; // provisional: AikStrike overwrites with the exact gate
+    if (!AikStrike(local, weapon, objectPool, localHead, enemy))
+        return; // aikDbgSt = exact refusal code (12/13/14/15/7) set in AikStrike
     aikDbgSt = 9; // packet sent
     // Elite AimkillRefreshAfterKill: SwapWeapon 1/2 + reset after a confirmed kill
     if (game_sdk->GetHp(enemy) < hpBefore ||

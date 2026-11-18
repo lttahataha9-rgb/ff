@@ -70,12 +70,13 @@ static UIWindow *SafeHostWindow(void)
 // Quick-toggle buttons over the game. VISIBILITY: ghir li n-active-hom f
 // l'panel (gFltShow — user: "mnin n'active hadi → tla3 lya l'boutonat f
 // l'écran"). A plain tap toggles the option on and off, dragging moves the
-// button around. COLOR: OFF = look qdim (cyan border, 7amra label, byd knob);
-// ON → lounha ybdel (Fly=7amra, Runn/Telekill=mauve, Send=khadra — user:
-// "mnin ndire liha ON itbdel lounha"). Panel = plain checkbox (machi hada
+// button around. COLOR: card = always the OFF look (cyan border, 7amra
+// label); ONLY the iOS switch changes color when ON (Fly=7amra, Runn/
+// Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
+// changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_FLYULTRA = 4, FLTBTN_AUTOMARK = 5, FLTBTN_COUNT = 6 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_FLYULTRA = 4, FLTBTN_AUTOMARK = 5, FLTBTN_TELEMARK = 6, FLTBTN_COUNT = 7 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -112,6 +113,7 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  - khadra
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYULTRA - 7amra (fly family)
     ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (CHIBYA)
+    ImVec4(0.25f, 0.60f, 1.00f, 1.00f), // TELEMARK - azr9 (teleport)
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -127,29 +129,28 @@ static ImVec4 PanelBright(float k)
 
 static void DrawFloatingButton(int idx, const char *label, bool *v)
 {
-    // Visible ghir mnin n-active-ha f l'panel (gFltShow). OFF = look qdim
-    // (border cyan, label 7amra, knob byd); ON → kolchi ybdel l'loun dyalha
-    // (kFltOnCol) — user: "mnin ndire liha ON itbdel lounha".
+    // Visible ghir mnin n-active-ha f l'panel (gFltShow). Card look = ALWAYS
+    // neutral/OFF (cyan border, dark bg, red label): kolchi loun kaybdel ghir
+    // f t-switch dyal iOS mnin toggle ON (user: "color changes ONLY on the
+    // toggle switch", "label + iOS toggle switch", kbarr mn 54x58).
     FltBtnState &b = gFltBtn[idx];
-    const float W = 54.0f, H = 58.0f;   // user jdida: "54 58" (qbel 50x46)
+    const float W = 140.0f, H = 52.0f;   // bigger card: label left + switch right
+    const float swW = 42.0f, swH = 22.0f; // iOS switch track
     if (!b.inited) {
         b.inited = true;
         ImVec2 ds = ImGui::GetIO().DisplaySize;
         b.pos = ImVec2(ds.x - W - 12.0f, 64.0f + idx * (H + 12.0f));   // higher up
     }
 
-    // window look: OFF = qdim (cyan), ON = loun dyalha (bg/border — onPre)
+    // window look: NEUTRAL always (the OFF style) — the color lives only in
+    // the switch drawn below (user: body keeps the neutral/OFF look)
     ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(W, H), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-    const ImVec4 &oc = kFltOnCol[idx];
-    const bool onPre = *v; // style pushed before Begin → 1-frame lag (ghir 16ms)
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, onPre
-        ? ImVec4(0.05f + oc.x * 0.10f, 0.07f + oc.y * 0.10f, 0.10f + oc.z * 0.10f, 0.72f)
-        : ImVec4(0.05f, 0.07f, 0.10f, 0.62f));
-    ImGui::PushStyleColor(ImGuiCol_Border, onPre ? oc : ImVec4(0.31f, 0.90f, 1.00f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.07f, 0.10f, 0.62f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.31f, 0.90f, 1.00f, 1.00f));
 
     char wname[48];
     snprintf(wname, sizeof(wname), "##fltwin%d", idx);
@@ -196,29 +197,35 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
 
-    // label: OFF = 7amra (look qdim), ON = loun dyal l'button — auto-fit font
-    // bach ma ykhrejch mn l'button sghir (50x46)
+    // label: neutral red always (look qdim) — auto-fit so it never runs
+    // under the switch
+    const ImVec4 &oc = kFltOnCol[idx];
+    const float labelMax = W - swW - 20.0f;
     ImFont *fnt = ImGui::GetFont();
     float fs = ImGui::GetFontSize();
     ImVec2 ts = fnt->CalcTextSizeA(fs, FLT_MAX, 0.0f, label);
-    if (ts.x > W - 6.0f && fs > 9.0f)
+    if (ts.x > labelMax && fs > 9.0f)
     {
-        fs = fs * (W - 6.0f) / ts.x;
+        fs = fs * labelMax / ts.x;
         ts = fnt->CalcTextSizeA(fs, FLT_MAX, 0.0f, label);
     }
-    ImU32 col32 = on ? IM_COL32((int)(oc.x * 255.0f), (int)(oc.y * 255.0f), (int)(oc.z * 255.0f), 255)
-                     : IM_COL32(255, 64, 64, 255);
-    dl->AddText(fnt, fs, ImVec2(wp.x + (W - ts.x) * 0.5f, wp.y + 4.0f), col32, label);
+    dl->AddText(fnt, fs, ImVec2(wp.x + 9.0f, wp.y + (H - ts.y) * 0.5f),
+                IM_COL32(255, 64, 64, 255), label);
 
-    // knob SLIDES left (OFF) / right (ON) — scaled l button sghir (50x46)
-    const float margin = 4.0f, r = 9.0f;
-    float targetX = on ? (wp.x + W - margin - r) : (wp.x + margin + r);
-    if (b.knobX <= 0.0f) b.knobX = targetX;              // first frame: snap
-    float k = ImGui::GetIO().DeltaTime * 14.0f;          // smooth slide
+    // iOS switch — the ONLY part that changes color (ON = kFltOnCol[idx])
+    float swX = wp.x + W - swW - 9.0f;
+    float swY = wp.y + (H - swH) * 0.5f;
+    ImU32 track = on ? IM_COL32((int)(oc.x * 255.0f), (int)(oc.y * 255.0f), (int)(oc.z * 255.0f), 255)
+                     : IM_COL32(70, 74, 82, 255); // OFF = grey track
+    dl->AddRectFilled(ImVec2(swX, swY), ImVec2(swX + swW, swY + swH), track, swH * 0.5f);
+    const float kR = swH * 0.5f - 2.0f;               // knob radius
+    float targetX = on ? (swX + swW - kR - 2.0f) : (swX + kR + 2.0f);
+    if (b.knobX <= 0.0f) b.knobX = targetX;           // first frame: snap
+    float k = ImGui::GetIO().DeltaTime * 14.0f;       // smooth slide
     if (k > 1.0f) k = 1.0f;
     b.knobX += (targetX - b.knobX) * k;
-    dl->AddCircleFilled(ImVec2(b.knobX, wp.y + H * 0.66f), r,
-                        on ? col32 : IM_COL32(245, 245, 245, 255), 36);
+    dl->AddCircleFilled(ImVec2(b.knobX, swY + swH * 0.5f), kR,
+                        IM_COL32(245, 245, 245, 255), 36);
 
     gFltBtnRect[idx] = ImRect(wp, ImVec2(wp.x + W, wp.y + H));   // always tappable
 
@@ -480,6 +487,9 @@ ImFont* Urbanist;
                 case FLTBTN_AUTOMARK:
                     DrawFloatingButton(i, oxorany("Auto Mark"), &Vars.AutoMark);
                     break;
+                case FLTBTN_TELEMARK:
+                    DrawFloatingButton(i, oxorany("Tele Mark"), &Vars.TeleMark);
+                    break;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
@@ -548,7 +558,7 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
-                        ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, s>0=packets (Elite Send st1-11), c: cover always 0 (removed)
+                        ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, st11=AikInit, st12-15=strike gates, s>0=packets, c: cover always 0 (removed)
                         ImGui::Spacing();
                         if (ImGui::BeginTable("splitm", 3))
                         {
@@ -563,12 +573,16 @@ ImFont* Urbanist;
                                 }
                             }
                             ImGui::TableNextColumn();
-                            ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark);
+                            if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
                         }
                         ImGui::EndTable();
-                        ImGui::TextDisabled("Fly Ultra = Stop Time + Fly (climb 7m)"); // option wahda (user)
+                        // 2 sliders taht Fly Ultra (user: "2 khtouta ythakmo
+                        // lya f chhal ytl3 w chhal mn mitro ytl3")
+                        ImGui::SliderFloat(oxorany("FU speed / tick"), &Vars.fuSpeed, 0.02f, 1.00f, "%.2f");
+                        ImGui::SliderFloat(oxorany("FU metres"), &Vars.fuMaxM, 1.0f, 100.0f, "%.1f m");
+                        ImGui::TextDisabled("Fly Ultra = Stop Time + climb, cap -> auto TP mark"); // option wahda (user)
                         ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
                         ImGui::EndTabItem();
                     }
