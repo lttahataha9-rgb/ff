@@ -512,14 +512,14 @@ void *GetClosestEnemyAik()
             if (game_sdk->GetHp(Player) <= 0)
                 continue;
             float distance = Vector3::Distance(getPosition(Player), getPosition(LocalPlayer));
-            if (game_sdk->get_isVisible(Player) && tanghinh::isVisible(Player) &&
-                distance < shortestVisDistance)
+            // cover/LOS gates REMOVED (user: "hyd mnha l'cover" + "0 second"):
+            // closest enemy ANY time, even through cover
+            if (distance < shortestVisDistance)
             {
                 shortestVisDistance = distance;
                 closestVisEnemy = Player;
             }
         }
-        // cover port removed (user: "ghir 7iyed l'cover") - visible-only again
         return closestVisEnemy;
     }
     catch (...)
@@ -1486,15 +1486,16 @@ static void AikShuffleValidate(void *weapon, void *params, uint32_t seedEnc)
 // Packet field values stay Elite-verbatim; the hit hash still stores BEFORE
 // CheckParametros (Android order L2827->2828).
 // st set here: 7 bad baseDamage / 12 no-checkParams / 13 no-damage-msg /
-// 14 strike gate (dead / no LOS / no head) / 15 no-TimeService.
+// 14 strike gate (dead / no head) / 15 no-TimeService.
+
+static bool Send108(void *local, void *enemy); // zexisyy part 2 (defined below)
+
 static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos, void *target)
 {
     if (!local || !weapon || !hitInfo || !target) { aikDbgSt = 14; return false; }
     if (game_sdk->get_IsDieing(target) || game_sdk->GetHp(target) <= 0) { aikDbgSt = 14; return false; }
-    // raycast LOS = Android isVisible_Aimbot semantics (tanghinh::isVisible =
-    // nefs Physics_Raycast layer12 li khdem f ESP — get_isVisible flag = ghlt
-    // w mab9ach f candidates zada, Android candidate loop ma 3ndoch visibility)
-    if (!tanghinh::isVisible(target)) { aikDbgSt = 14; return false; }
+    // cover/LOS gate REMOVED (user: "hyd mnha l'cover ... 0 second") — strike
+    // through cover, no raycast (st14 now = dead / no head only)
 
     void *headCollider = aik.HeadCollider(target);
     if (!headCollider) { aikDbgSt = 14; return false; }
@@ -1621,7 +1622,11 @@ static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos,
     aikDbgSent++;
 
     aik.StopFire(local, weapon);
-    aik.ResetSwapTime(local); // opcode-108 Syns_SwapWeapon_Impl skipped (see header)
+    // swap weapon IN the strike (user: "zide fiha swap weapon f l'Aimkill") =
+    // Elite order L2868-2870: StopFire -> Syns_SwapWeapon_Impl(108) -> reset.
+    // Our Send108 IS that opcode-108 change-inventory-on-hand packet.
+    Send108(local, target);
+    aik.ResetSwapTime(local);
     return true;
 }
 
@@ -1899,14 +1904,13 @@ void RunFlyUltra(float dt)
     Transform_SetPosition(tf, pos);
 }
 
-// ---- Stop Time (Elite: Speed Timer freeze) — MERGED with Fly Ultra ---------
+// ---- Stop Time (Elite: Speed Timer freeze) — SEPARATE again ---------------
 // "ywe9ef l'wa9t": TimeService.m_FixedDeltaTime -> 0.00001 (near freeze),
 // OFF -> restore the saved value (Elite restores 0.033).
 // Dump-verified: GameFacade.CurrentGameSimulationTimer() = RVA 0x5919E58
 // returns TimeService; TimeService.m_FixedDeltaTime @ +0x2C.
-// ONE option (user: "option wahda tch3el Stop Time w Fly Ultra"): the Fly
-// Ultra checkbox/button arms BOTH the freeze and the 7 m climb. The old
-// noDelay 0.065 speed-timer path is REMOVED ("machi p speed timer").
+// USER: "t7iyed l'Stop Time w dir l'button rasso bouhdo, w Fly Ultra bouhdo"
+// -> Stop Time = OWN checkbox/button, NO LONGER armed by Fly Ultra.
 static bool g_stPatched = false;
 static float g_stOrig = 0.033f;
 static float g_stDeltaShow = 0.0f; // FEATURES tab telemetry
@@ -1914,9 +1918,9 @@ void RunStopTime()
 {
     // iOS hardening (entry crash fix): the game's static CurrentGame may still
     // be null at app entry -> calling into il2cpp then = NRE crash. So: NO
-    // game-RVA call at all unless a timer mode is on (or a restore is pending)
+    // game-RVA call at all unless Stop Time is on (or a restore is pending)
     // AND a live local player proves we are inside a match.
-    if ((!Vars.StopTime && !Vars.FlyUltra) && !g_stPatched)
+    if (!Vars.StopTime && !g_stPatched)
         return;
     void *match = game_sdk->Curent_Match();
     if (!match)
@@ -1945,10 +1949,8 @@ void RunStopTime()
     if (!ts)
         return;
     float *pDelta = (float *)((uintptr_t)ts + oxo("0x2C"));
-    if (Vars.StopTime || Vars.FlyUltra)
+    if (Vars.StopTime)
     {
-        // merged option: Fly Ultra armed -> freeze the sim (the 7 m climb
-        // then runs on a frozen world = smooth rise, no server correction)
         float cur = *pDelta;
         g_stDeltaShow = cur;
         if (cur <= 0.001f)
@@ -2251,10 +2253,8 @@ void StartAimkill() {
     if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(enemy)) { aikDbgSt = 5; return; }
     if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)) { aikDbgSt = 5; return; }
     if (game_sdk->GetHp(enemy) <= 0) { aikDbgSt = 5; return; }
-    // cover port REMOVED (user: "ghir 7iyed l'cover mn l'aimkill") ->
-    // visibility gates only, exactly the zexisyy behavior.
-    if ((!game_sdk->get_isVisible) || !game_sdk->get_isVisible(enemy)) { aikDbgSt = 5; return; }
-    if (!tanghinh::isVisible(enemy)) { aikDbgSt = 5; return; }
+    // cover/LOS gates REMOVED (user: "hyd mnha l'cover ... 0 second") — the
+    // candidate checks above are all that's left (zexisyy had no LOS gate)
     aikDbgN = 1;
 
     // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
@@ -2292,8 +2292,9 @@ void StartAimkill() {
 // Android... Channel is 2. Cache flag is 0. Weapon id 1 sends unique id 0."
 static void *NewReloadPacket() {
     static void *klass = nullptr;
+    static void *(*objectNew)(void *) = nullptr; // dlsym once — 0-second path
     if (!klass) klass = FindGameClass("message", "EOBFCLNNIJH");
-    auto objectNew = (void *(*)(void *))UnitySym("il2cpp_object_new");
+    if (!objectNew) objectNew = (void *(*)(void *))UnitySym("il2cpp_object_new");
     if (!klass || !objectNew) return nullptr;
     void *obj = objectNew(klass);
     if (!obj) return nullptr;
@@ -2303,7 +2304,8 @@ static void *NewReloadPacket() {
 
 static bool Send108(void *local, void *enemy) {
     if (!Vars.AimKillSend || !local || !enemy) return false;
-    if (!game_sdk->get_isVisible(enemy) || !tanghinh::isVisible(enemy)) return false;
+    // cover/LOS gates REMOVED (user: "hyd mnha l'cover") — the 108 swap sync
+    // goes with every strike, through cover
 
     auto getWeaponOnHand = (void *(*)(void *))getRealOffset(OFF_Zexis_GetWeaponOnHand);
     auto getItemDataID = (int (*)(void *))getRealOffset(OFF_Zexis_GetItemDataID);
