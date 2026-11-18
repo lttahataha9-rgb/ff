@@ -50,6 +50,7 @@ struct Vars_t
     bool FixFly = {};      // FIX FLY (Elite Speed Timer V2): m_FixedDeltaTime curve
     int fixFlyVal = 1;     // FIX FLY slider 1..20 (Elite seekbar 5992)
     bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
+    bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
 } Vars;
 
 class game_sdk_t
@@ -2366,6 +2367,57 @@ static Vector3 MarkedLoc()
     if (!markCtrl)
         return Vector3::zero();
     return *(Vector3 *)((uintptr_t)markCtrl + oxo("0xB0"));
+}
+
+// ---- RESET GUEST (Elite "Reset Guest" switch parity) -------------------------
+// Elite hooks COW.GameConfig.get_ResetGuest() -> true (Dobby, Android). We can
+// NO LONGER hook (no substrate inside an ESign-injected IPA: dyld fails at
+// launch -> CRASH), so we write the getter's backing store DIRECTLY — dump
+// verified on this iOS 1.132.X dump:
+//   GameConfig (static class, ns "COW") m_LocalConfig @ statics +0x130
+//   LocalConfig.resetGuest (bool) @ +0xD6
+// (getter neighborhood proves the read: get_GMSDKEnableDebugLog sits right
+//  next to get_ResetGuest and reads LocalConfig.gmsdkEnableDebugLog @ +0xA3.)
+// While ON: everywhere the game checks the config sees resetGuest = true ->
+// its OWN "delete/reset guest" option unlocks (ban popup
+// UIAccountForbiddenPopWndView.IsGuestAccountDeleteEnabledInCurrentRegion ->
+// ShowDeleteGuestAccountConfirmation -> the GAME's confirm dialog). We NEVER
+// delete anything ourselves (fail-closed). m_LocalConfig is re-read from
+// statics EVERY frame (if the config object is re-parsed we follow the new
+// one, never a stale pointer). Missing il2cpp exports -> status -1 (INFO tab).
+static void *g_rgKlass = nullptr;
+static void *(*g_rgStatics)(void *) = nullptr;
+static int g_rgState = 0; // 0 = retry, 1 = OK, -1 = il2cpp API missing
+void RunResetGuest()
+{
+    if (g_rgState == 0)
+    {
+        if (!g_rgStatics)
+        {
+            g_rgStatics = (void *(*)(void *))UnitySym("il2cpp_class_get_static_fields");
+            if (!g_rgStatics)
+            {
+                g_rgState = -1; // il2cpp exports not available -> fail-closed
+                return;
+            }
+        }
+        g_rgKlass = FindGameClass("COW", "GameConfig");
+        if (!g_rgKlass)
+            return; // domain not ready yet -> retry next frame
+        g_rgState = 1;
+    }
+    if (g_rgState != 1 || !g_rgKlass || !g_rgStatics)
+        return;
+    void *st = g_rgStatics(g_rgKlass);
+    void *lc = (st && (uintptr_t)st > 0x10000)
+                   ? *(void **)((uintptr_t)st + oxo("0x130"))
+                   : nullptr; // GameConfig.m_LocalConfig (statics +0x130)
+    if (!lc || (uintptr_t)lc < 0x10000)
+        return; // config not loaded yet -> retry
+    bool *f = (bool *)((uintptr_t)lc + oxo("0xD6")); // LocalConfig.resetGuest
+    bool want = Vars.ResetGuest;
+    if (*f != want)
+        *f = want; // re-assert (the game may re-parse config over us)
 }
 
 // ---- forceGlideTP — REMOVED (crash fix, user: "mnin fixiti teleport la 7m

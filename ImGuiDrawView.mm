@@ -658,7 +658,23 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.31f, 0.90f, 1.00f, 1.00f), "4xCRYPTED");
                         ImGui::Text("FreeFire 1.132.X");
-                        ImGui::TextDisabled("Telekill / Fly V2 / Ninja Run");
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
+                        ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
+                        ImGui::TextDisabled("Fly / Stop Time / Fix Fly / Ghost / Tele Mark");
+                        ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
+                        ImGui::TextDisabled("AimKill / Telekill / Down Kill V1 / V2");
+                        ImGui::Spacing();
+                        ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
+                        if (g_rgState == 1)
+                            ImGui::TextDisabled("config OK: ON -> option 'Delete Guest'");
+                        else if (g_rgState == -1)
+                            ImGui::TextDisabled("config unavailable (il2cpp API)");
+                        else
+                            ImGui::TextDisabled("config: ... (retry)");
+                        ImGui::TextDisabled("f l'game -> CONFIRM -> OFF 3awd");
                         ImGui::EndTabItem();
                     }
                     ImGui::EndTabBar();
@@ -683,6 +699,7 @@ ImFont* Urbanist;
             RunMarkTP();
             RunTelekill();
             StartAimkill();
+            RunResetGuest(); // Reset Guest config (login/lobby — runs always)
             // zexisyy: msg 108 (reload) — same frame as Aimkill, after local+enemy
             // (finder gated too: ma ndirouch raycast/finder f l'entry/lobby)
             if (Vars.AimKillSend)
