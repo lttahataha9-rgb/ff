@@ -38,17 +38,14 @@ struct Vars_t
     float flyhei = 300.0f; // FlyV2 sky altitude (video ref = f l'jouj; 0 = ground zone center)
     float khoangcach = 10.0f;
     // ---- ported from Android EliteXzp (the "Elite" project) ----
-    bool FlyUltra = {};   // Fly Hack V2: endless climb +0.2/tick ("li kantla3o bih")
+    bool FlyOp = {};       // FLY OP (user snippet "FLY HACK OP"): +0.10 m/frame rise (iOS port)
     bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
     bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
     bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
-    float fuSpeed = 0.20f; // Fly Ultra: chhal ytla3 f wa7d tick (slider, default Elite 0.20)
-    float fuMaxM = 7.0f;   // Fly Ultra: chhal mn mitro ytla3 (slider; l9as l'cap -> auto TP l'mark)
+    // (Fly Ultra sliders removed — user: "t7iyed Fix Fly w Fly Ultra")
     // ---- ported from Android EliteXzp round 2 (user: "DOWN KILL + V2, FLY FIX, GHOST") ----
     bool DownKill = {};    // DOWN KILL: -1.8 m/f on me + all enemies in 200 m
     bool DownKillV2 = {};  // DOWN KILL V2: smooth -0.4/f descent to -2.5 m, restore off
-    bool FixFly = {};      // FIX FLY (Elite Speed Timer V2): m_FixedDeltaTime curve
-    int fixFlyVal = 1;     // FIX FLY slider 1..20 (Elite seekbar 5992)
     bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
     bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
 } Vars;
@@ -1826,88 +1823,44 @@ static void *g_dmg99 = nullptr;
 
 // ============================================================
 //  Ported from Android EliteXzp (the "Elite" project)
-//  Fly Ultra / Stop Time / Mark TP / AimKill cover
+//  Fly Op / Stop Time / Mark TP / AimKill cover
 //  Every offset dump-verified vs THIS build's dump.cs (fail-closed).
 // ============================================================
 #include <chrono>
 #include <math.h>
 
-// ---- Fly Ultra (Elite: Fly Hack V2 "montee automatique sans saut") ----------
-// RELATIVE climb: pos.y + 0.2 per Elite tick (~35 ms) from the position the
-// server actually has us at every frame. The old absolute g_fuY fought the
-// server's position correction (rose ~2 m then vibrated). Small step = "itl3
-// b chwya". Cap = activation Y + Vars.fuMaxM (slider) then AUTO TP to my
-// mark at the cap ("ywsel l'cap -> teleport l'mark"). X/Z stay free. OFF /
-// lobby / dead -> re-arm from the current height.
-// mark helpers are defined further down — the cap-TP below needs them
+// ---- FLY OP (user snippet "FLY HACK OP" — ported to iOS) --------------------
+// Original snippet: pos.y += 0.10f per frame via Transform_INTERNAL_SetPosition,
+// guarded by its own flag and exclusive with the other fly ("if (realFly) return").
+// iOS port: game_sdk->Component_GetTransform / get_position / Transform_SetPosition,
+// and the step is dt-based (6.0 m/s = the snippet's 0.10 f @60fps) so it climbs at
+// the SAME speed on 60 Hz and 120 Hz screens (user: "t-updati liya had l'fly w
+// trado iOS"). Exclusive with Fly V2 (Flyingtest = the snippet's realFly).
+// Lobby/dead guard via get_MaxHP <= 0. Endless rise (no cap) — same as snippet.
+// mark helpers are defined further down (kept for Tele Mark)
 static Vector3 MarkedLoc();
 static bool TeleportToMark(Vector3 target);
-
-static bool g_fuArmed = false;
-static bool g_fuTped = false; // cap reached + auto-TP done (one climb per toggle)
-static float g_fuBase = 0.0f; // activation Y (cap reference)
-void RunFlyUltra(float dt)
+void RunFlyOp(float dt)
 {
-    if (!Vars.FlyUltra)
-    {
-        g_fuArmed = false;
-        g_fuTped = false;
+    if (!Vars.FlyOp)
         return;
-    }
     if (Vars.Flyingtest)
-    {
-        g_fuArmed = false;
-        g_fuTped = false;
-        return; // FlyV2 owns Y (panel unchecks Fly Ultra too - no 2 flies fighting)
-    }
-
+        return; // exclusive: FlyV2 owns Y (snippet: if (realFly) return)
     void *match = game_sdk->Curent_Match();
     if (!match)
         return;
     void *local = game_sdk->GetLocalPlayer(match);
-    if (!local)
-        return;
-    if (game_sdk->get_MaxHP(local) <= 0)
-    {
-        g_fuArmed = false;
-        g_fuTped = false;
-        return; // lobby / dead (new life -> re-arm a fresh climb)
-    }
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+        return; // lobby / dead
     void *tf = game_sdk->Component_GetTransform(local);
     if (!tf)
         return;
     Vector3 pos = game_sdk->get_position(tf);
     if (pos == Vector3::zero())
         return;
-    if (g_fuTped)
-        return; // climb + cap-TP already done this toggle (idle at the mark)
-    if (!g_fuArmed)
-    {
-        g_fuBase = pos.y;
-        g_fuArmed = true;
-    }
-    // 2 sliders (user: "2 khtouta: chhal ytl3 f wa7d tick w chhal mn mitro")
-    float spd = Vars.fuSpeed;
-    if (spd < 0.01f) spd = 0.01f;
-    float maxM = Vars.fuMaxM;
-    if (maxM < 1.0f) maxM = 1.0f;
-    // relative step: climb from where the server actually has us (post-correction)
-    float next = pos.y + spd * (dt / 0.035f); // Elite ApplyFlyHackV2: +0.20f per ~35 ms tick
-    float fuCap = g_fuBase + maxM;            // cap = activation Y + fuMaxM metres
-    if (next >= fuCap)
-    {
-        // cap reached -> AUTO TP exactly 7 m above my mark (TeleportToMark).
-        // No mark = fail-closed: hold at the cap until one exists.
-        Vector3 mk = MarkedLoc();
-        if (mk != Vector3::zero() && TeleportToMark(mk))
-        {
-            g_fuTped = true; // one climb + TP per toggle
-            g_fuArmed = false;
-            return; // ma n-overwrite-ich l'TP b l'pos l'9dim
-        }
-        next = fuCap; // hold at the cap
-    }
-    pos.y = next;
+    // snippet: +0.10f per frame (60 fps) -> dt-based 6 m/s (clamped dt = safety)
+    float step = (dt > 0.0f && dt < 0.25f) ? dt : 0.016f;
+    pos.y += 6.0f * step;
     Transform_SetPosition(tf, pos);
 }
 
@@ -2106,98 +2059,8 @@ void RunDownKillV2()
     DownKillPullEnemies(local, p);
 }
 
-// ---- FIX FLY (Elite Speed Timer V2, floating label "FIX FLY") ----------------
-// Nefs l'campo dyal Stop Time (TimeService.m_FixedDeltaTime @ +0x2C) walakin b
-// value slider 1..20 -> anchor curve (Elite 5991/5992 FastFireMaxTimer):
-// v<=1 -> 0.033, 2 -> 0.035, 3 -> 0.038, 5 -> 0.045, 8 -> 0.058, 10 -> 0.070,
-// 13 -> 0.095, 16 -> 0.130, 20 -> 0.200 (linear lerp between anchors).
-// OFF -> restore l'orig. Stop Time wins (RunFixFly kaynaddi QBEL RunStopTime w
-// kayrje3 l'orig ila StopTime 3ndha — freeze owns the field).
-// Entry hardening nafs dyal RunStopTime: ZERO game-RVA call ila ma kaynsh
-// local player f match (entry crash fix).
-static bool g_fxPatched = false;
-static float g_fxOrig = 0.033f;
-static float g_fxShow = 0.0f; // FEATURES tab telemetry
-void RunFixFly()
-{
-    bool want = Vars.FixFly && !Vars.StopTime;
-    if (!want && !g_fxPatched)
-        return;
-    void *m = game_sdk->Curent_Match();
-    if (!m)
-        return;
-    void *local = game_sdk->GetLocalPlayer(m);
-    if (!local || game_sdk->get_MaxHP(local) <= 0)
-        return;
-    static void *(*simTimerFn)() = nullptr;
-    static bool simTried = false;
-    if (!simTried)
-    {
-        simTried = true;
-        void *cand = (void *)getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
-        Dl_info goodInfo{};
-        Dl_info candInfo{};
-        if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
-            dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase &&
-            goodInfo.dli_fbase == candInfo.dli_fbase)
-            simTimerFn = (void *(*)())cand;
-    }
-    if (!simTimerFn)
-        return;
-    void *ts = simTimerFn();
-    if (!ts)
-        return;
-    float *pDelta = (float *)((uintptr_t)ts + oxo("0x2C"));
-    if (want)
-    {
-        if (!g_fxPatched)
-        {
-            g_fxOrig = *pDelta;
-            g_fxPatched = true;
-        }
-        float v = (float)Vars.fixFlyVal;
-        float delta;
-        if (v <= 0.0f)
-            delta = 0.00001f;
-        else if (v <= 1.0f)
-            delta = 0.033f;
-        else
-        {
-            static const float ax[9] = {1.0f, 2.0f, 3.0f, 5.0f, 8.0f, 10.0f, 13.0f, 16.0f, 20.0f};
-            static const float ay[9] = {0.033f, 0.035f, 0.038f, 0.045f, 0.058f, 0.070f, 0.095f, 0.130f, 0.200f};
-            int idx = 8;
-            for (int i = 0; i < 9; i++)
-            {
-                if (v <= ax[i])
-                {
-                    idx = i;
-                    break;
-                }
-            }
-            int i0 = idx - 1;
-            if (i0 < 0)
-                i0 = 0;
-            float t = (ax[idx] != ax[i0]) ? (v - ax[i0]) / (ax[idx] - ax[i0]) : 0.0f;
-            if (t < 0.0f)
-                t = 0.0f;
-            if (t > 1.0f)
-                t = 1.0f;
-            delta = ay[i0] + (ay[idx] - ay[i0]) * t;
-        }
-        *pDelta = delta;
-        g_fxShow = delta;
-    }
-    else
-    {
-        if (g_fxPatched)
-        {
-            if (*pDelta != g_fxOrig)
-                *pDelta = g_fxOrig;
-            g_fxPatched = false;
-        }
-        g_fxShow = *pDelta;
-    }
-}
+// ---- FIX FLY + Fly Ultra REMOVED (user: "t7iyed Fix Fly w Fly Ultra") --------
+// Replaced by FLY OP (user snippet "FLY HACK OP", dt-based rise) above.
 
 // ---- GHOST (Elite Ghost Hack V4, floating label "GHOST HACK") ----------------
 // iOS dump-verified (1.132.X):
@@ -2434,7 +2297,7 @@ void RunResetGuest()
 // the teleport itself worked WITHOUT any spoof before the 7 m change
 // (430e8d2) — the pin re-asserts the position every frame anyway.
 
-// shared +7 m pin (Tele Mark + Fly Ultra cap-TP): hold the arrival spot for
+// shared +7 m pin (Tele Mark): hold the arrival spot for
 // 500 ms (PLAIN Transform_SetPosition, NO spoof — crash fix) so clamp /
 // knockback cannot eat the 7 m, then release -> the game drops us ON the mark
 // (user: "ay blas n teleporta liha khaso ytipini fou9ha b 7 m").
@@ -2486,7 +2349,7 @@ void RunMarkTP()
 {
     g_markDbg = 0;
 
-    // shared +7 m pin: hold the TP arrival (Tele Mark / Fly Ultra cap-TP) for
+    // shared +7 m pin: hold the TP arrival (Tele Mark) for
     // 500 ms with PLAIN position sets (NO glide spoof — crash fix), then
     // release -> normal physics drop us ON the mark
     if (g_tpPin)
