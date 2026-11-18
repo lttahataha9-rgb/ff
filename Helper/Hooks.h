@@ -32,6 +32,7 @@ struct Vars_t
     // ---- ported from X96 2Ripper: Telekill / Fly V2 / Ninja Run ----
     bool Telekill = {};
     bool AimKillSend = {}; // SEND button: crafts the game's own C2S damage packet (Android EliteXzp port)
+    bool AimKill360 = {};  // AIMKILL 360: rotate toward target so the hit registers (Elite Aimkill360)
     bool fly = {};        // RUNN (ninja run)
     bool Flyingtest = {}; // Fly V2
     float flySpeed = 0.75f;
@@ -2634,7 +2635,7 @@ static bool SmartCoverKill(void *enemy)
 // 15 no-TimeService.  n: 1 = target acquired.
 // s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
 void StartAimkill() {
-    if (!Vars.AimKillSend) return;
+    if (!Vars.AimKillSend && !Vars.AimKill360) return;
     aikDbgSt = 1;
     aikDbgN = 0;
     aikDbgC = 0;
@@ -2656,6 +2657,18 @@ void StartAimkill() {
     // cover/LOS gates REMOVED (user: "hyd mnha l'cover ... 0 second") — the
     // candidate checks above are all that's left (zexisyy had no LOS gate)
     aikDbgN = 1;
+
+    // AIMKILL 360 (Elite Aimkill360): "snap aim onto enemy head when target is
+    // behind / off-screen so the shot registers" + "silently rotate the local
+    // player toward the current kill target" — face him the SAME frame we
+    // strike so the server's raycast accepts the hit from ANY direction.
+    if (Vars.AimKill360)
+    {
+        Vector3 eHead = GetHeadPosition(enemy);
+        Vector3 myPos = CameraMain(local);
+        if (eHead != Vector3::zero() && myPos != Vector3::zero())
+            game_sdk->set_aim(local, GetRotationToTheLocation(eHead, 0.1f, myPos));
+    }
 
     // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
     if (!AikInit()) { aikDbgSt = 11; return; }

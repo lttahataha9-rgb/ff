@@ -75,8 +75,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_COUNT = 11 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_AIMKILL360 = 4, FLTBTN_STOPTIME = 5, FLTBTN_FLYOP = 6, FLTBTN_FLYJUP = 7, FLTBTN_AUTOMARK = 8, FLTBTN_TELEMARK = 9, FLTBTN_DOWNKILL2 = 10, FLTBTN_GHOST = 11, FLTBTN_COUNT = 12 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -111,6 +111,7 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYV2    - 7amra
     ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // RUNN     - mauve
     ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  - khadra
+    ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // A360     - cyan (kima l'btn dyalo f l'source)
     ImVec4(1.00f, 0.82f, 0.25f, 1.00f), // STOPTIME - sfer (freeze)
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYOP    - 7amra (fly family, snippet)
     ImVec4(0.75f, 1.00f, 0.20f, 1.00f), // FLYJUP   - chartreuse (jump = energy)
@@ -493,6 +494,9 @@ ImFont* Urbanist;
                 case FLTBTN_AIMKILL:
                     DrawFloatingButton(i, oxorany("Send"), &Vars.AimKillSend);
                     break;
+                case FLTBTN_AIMKILL360:
+                    DrawFloatingButton(i, oxorany("360"), &Vars.AimKill360);
+                    break;
                 case FLTBTN_STOPTIME:
                     DrawFloatingButton(i, oxorany("Stop Time"), &Vars.StopTime);
                     break;
@@ -578,6 +582,7 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
+                        if (ImGui::Checkbox(oxorany("AimKill 360"), &Vars.AimKill360)) gFltShow[FLTBTN_AIMKILL360] = Vars.AimKill360;
                         ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, st11=AikInit, st12-15=strike gates, s>0=packets, c: cover always 0 (removed)
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime; // own option (user: bouhdo)
@@ -644,7 +649,7 @@ ImFont* Urbanist;
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
-                        ImGui::TextDisabled("AimKill / Telekill / Down Kill V2");
+                        ImGui::TextDisabled("AimKill / AimKill 360 / Telekill / Down Kill V2");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
                         if (g_rgState == 1)
