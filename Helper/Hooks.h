@@ -44,7 +44,6 @@ struct Vars_t
     bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
     // (Fly Ultra sliders removed — user: "t7iyed Fix Fly w Fly Ultra")
     // ---- ported from Android EliteXzp round 2 (user: "DOWN KILL + V2, FLY FIX, GHOST") ----
-    bool DownKill = {};    // DOWN KILL: -1.8 m/f on me + all enemies in 200 m
     bool DownKillV2 = {};  // DOWN KILL V2: smooth -0.4/f descent to -2.5 m, restore off
     bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
     bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
@@ -1935,11 +1934,14 @@ void RunStopTime()
     }
 }
 
-// ---- DOWN KILL / DOWN KILL V2 (Elite DownKillLoop / DownKillV2Loop) ----------
-// V1 (user: "DOWN KILL + V2 kolhom"): kol frame rasi -1.8 m (ta7t l'ard) w
-// l'a3da2 li f 200 m zado -1.8 m (nfs l'order dyal Elite: dist qbel l'sub).
+// ---- DOWN KILL V2 (Elite DownKillV2Loop; V1 REMOVED: "thyd Down Kill normal") -
 // V2: nozol b shewwia -0.4 m/f l -2.5 m men groundY l9itah men l'awl, pin;
 // OFF -> 6 frames restore groundY + 0.5 (Elite dkv2ExitHold).
+// GHOST COMBO (user: "twali tkhdem b Ghost w bla m-thbetni"): Ghost hard-sets
+// my position every frame (underground pin) -> while Ghost is ON, V2 writes NO
+// position at all (2 writers katqatelou = stuck / m-thbetek feel) but KEEPS
+// WORKING: it still pulls the enemies down (the kill part). V2 re-arms fresh
+// from the surface after Ghost goes OFF (run=false while ghost owns Y).
 // Lobby guard = get_MaxHP <= 0 (nfs l'pattern dyal l'run functions).
 static void DownKillPullEnemies(void *local, Vector3 myPos)
 {
@@ -1972,33 +1974,14 @@ static void DownKillPullEnemies(void *local, Vector3 myPos)
     }
 }
 
-void RunDownKill()
-{
-    if (!Vars.DownKill)
-        return;
-    void *m = game_sdk->Curent_Match();
-    if (!m)
-        return;
-    void *local = game_sdk->GetLocalPlayer(m);
-    if (!local || game_sdk->get_MaxHP(local) <= 0)
-        return;
-    void *tf = game_sdk->Component_GetTransform(local);
-    if (!tf)
-        return;
-    Vector3 p = game_sdk->get_position(tf);
-    if (p == Vector3::zero())
-        return;
-    p.y -= 1.8f;
-    Transform_SetPosition(tf, p);
-    DownKillPullEnemies(local, p);
-}
-
 static bool g_dkv2Run = false;
 static float g_dkv2GroundY = 0.0f;
 static float g_dkv2CurY = 0.0f;
 static int g_dkv2Exit = 0;
 void RunDownKillV2()
 {
+    // GHOST COMBO (user: "twali tkhdem b Ghost w bla m-thbetni"): see header above.
+    bool ghostOwns = Vars.Ghost;
     if (!Vars.DownKillV2)
     {
         if (g_dkv2Run)
@@ -2009,6 +1992,8 @@ void RunDownKillV2()
         if (g_dkv2Exit > 0)
         {
             g_dkv2Exit--;
+            if (ghostOwns)
+                return; // Ghost owns Y: NO restore write (no fight = no stuck)
             void *m = game_sdk->Curent_Match();
             void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
             void *tf = (local && game_sdk->get_MaxHP(local) > 0)
@@ -2041,6 +2026,16 @@ void RunDownKillV2()
     Vector3 p = game_sdk->get_position(tf);
     if (p == Vector3::zero())
         return;
+    if (ghostOwns)
+    {
+        // Ghost hard-sets my position every frame (underground pin) — V2 must
+        // NOT add its own write on top (2 writers = double-pin / "m-thbetek").
+        // V2 still WORKS m3a Ghost: it keeps pulling enemies down (kill part).
+        // Re-arm fresh from the surface after Ghost goes OFF.
+        g_dkv2Run = false;
+        DownKillPullEnemies(local, p);
+        return;
+    }
     if (!g_dkv2Run)
     {
         g_dkv2Run = true;

@@ -75,8 +75,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_AUTOMARK = 6, FLTBTN_TELEMARK = 7, FLTBTN_DOWNKILL = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_COUNT = 11 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_AUTOMARK = 6, FLTBTN_TELEMARK = 7, FLTBTN_DOWNKILL2 = 8, FLTBTN_GHOST = 9, FLTBTN_COUNT = 10 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -116,7 +116,6 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (CHIBYA)
     ImVec4(0.25f, 0.60f, 1.00f, 1.00f), // TELEMARK - azr9 (teleport)
     // ---- lounat JDADE (user: "DIRE LWN JDADE B L BOTON") — 4 boutonat jdad ----
-    ImVec4(1.00f, 0.42f, 0.70f, 1.00f), // DOWNKILL - wardo (pink)
     ImVec4(0.13f, 0.88f, 0.80f, 1.00f), // DOWNKILL2- ferrouj (teal)
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
 };
@@ -505,9 +504,6 @@ ImFont* Urbanist;
                 case FLTBTN_TELEMARK:
                     DrawFloatingButton(i, oxorany("Tele Mark"), &Vars.TeleMark);
                     break;
-                case FLTBTN_DOWNKILL:
-                    DrawFloatingButton(i, oxorany("Down Kill"), &Vars.DownKill);
-                    break;
                 case FLTBTN_DOWNKILL2:
                     DrawFloatingButton(i, oxorany("Down Kill V2"), &Vars.DownKillV2);
                     break;
@@ -596,8 +592,6 @@ ImFont* Urbanist;
                         if (ImGui::BeginTable("splitn", 2))
                         {
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Button Down Kill"), &Vars.DownKill)) gFltShow[FLTBTN_DOWNKILL] = Vars.DownKill;
-                            ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Button Down V2"), &Vars.DownKillV2)) gFltShow[FLTBTN_DOWNKILL2] = Vars.DownKillV2;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Button Ghost"), &Vars.Ghost)) gFltShow[FLTBTN_GHOST] = Vars.Ghost;
@@ -643,7 +637,7 @@ ImFont* Urbanist;
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
-                        ImGui::TextDisabled("AimKill / Telekill / Down Kill V1 / V2");
+                        ImGui::TextDisabled("AimKill / Telekill / Down Kill V2");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
                         if (g_rgState == 1)
@@ -670,7 +664,6 @@ ImFont* Urbanist;
             RunFlyV2();
             RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
             RunStopTime();
-            RunDownKill();
             RunDownKillV2();
             RunGhost();
             RunMarkTP();
