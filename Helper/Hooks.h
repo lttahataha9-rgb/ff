@@ -2611,6 +2611,42 @@ static bool SmartCoverKill(void *enemy)
     return false;
 }
 
+// ==== AikStrikePhase — the strike half of StartAimkill =======================
+// Split out of StartAimkill so the AIMKILL 360 ghost rotation (set_aim at
+// the enemy -> packet -> set_aim back at the player's own view) can be
+// returned on EVERY exit path below, exactly like Elite AimRotationGhost_End
+// sits right after the fire call (EliteMain.cpp L2409-2415).
+static void AikStrikePhase(void *local, void *enemy) {
+    // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
+    if (!AikInit()) { aikDbgSt = 11; return; }
+
+    void *weapon = aik.GetWeaponOnHand(local);
+    if (!weapon) { aikDbgSt = 6; return; }
+    if (!AikIsValidGun(weapon)) { aikDbgSt = 7; return; } // Elite IsValidGun gate
+    if (!AikInRange(local, enemy, weapon)) { aikDbgSt = 8; return; } // Elite range gate
+
+    // hit-object scratch = the local player's objectPool (Android _HitObjectInfoWp)
+    void *objectPool = *(void **)((uint64_t)local + OFF_Zexis_Player_ObjectPool);
+    if (!objectPool) { aikDbgSt = 10; return; }
+
+    Vector3 localHead;
+    if (!AikHeadPos(local, &localHead)) { aikDbgSt = 10; return; }
+
+    // Elite AimkillSendStrike ("00" Send): hit-scratch fill -> hit hash ->
+    // CheckParametros -> shuffle-validate -> StartFiring -> msg 106 with
+    // RealDamageValue=HP / DamageValue=baseDamage|(1<<24) / back-area on ->
+    // StopFire. AikStrike sends the packet itself and does aikDbgSent++.
+    int hpBefore = game_sdk->GetHp(enemy);
+    aikDbgSt = 11; // provisional: AikStrike overwrites with the exact gate
+    if (!AikStrike(local, weapon, objectPool, localHead, enemy))
+        return; // aikDbgSt = exact refusal code (12/13/14/15/7) set in AikStrike
+    aikDbgSt = 9; // packet sent
+    // Elite AimkillRefreshAfterKill: SwapWeapon 1/2 + reset after a confirmed kill
+    if (game_sdk->GetHp(enemy) < hpBefore ||
+        (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)))
+        AikRefreshAfterKill(local);
+}
+
 // ==== StartAimkill — Elite StartAimKillSend / AimkillSendStrike path ==============
 // st: 1 ran / 2 no-match / 3 not-live / 4 no-enemy / 5 enemy-fail / 6 no-gun /
 // 7 not-a-gun (or weapon baseDamage 0) / 8 out-of-range / 9 SENT /
@@ -2642,46 +2678,34 @@ void StartAimkill() {
     // candidate checks above are all that's left (zexisyy had no LOS gate)
     aikDbgN = 1;
 
-    // AIMKILL 360 (Elite Aimkill360): "snap aim onto enemy head when target is
-    // behind / off-screen so the shot registers" + "silently rotate the local
-    // player toward the current kill target" — face him the SAME frame we
-    // strike so the server's raycast accepts the hit from ANY direction.
+    // AIMKILL 360 — Elite Aimkill360 + AimRotationGhost_Begin/End: face the
+    // enemy ONLY while the hit packet is built, then hand the player's own
+    // rotation straight back in the SAME frame — the view never follows him
+    // ("t9tel bla manchouf fih": kill from behind while you keep looking the
+    // other way, wakha tddar l-aim wraya). Target = GetClosestEnemyAik =
+    // NEAREST living enemy every frame, so a squad in front drops one by one,
+    // fast ("la kano rab3a gadmya: tkhtar aqreb wa7ed w kt9tlo b sor3a").
+    Quaternion aik360Orig;
+    bool aik360Ghost = false;
     if (Vars.AimKill360)
     {
         Vector3 eHead = GetHeadPosition(enemy);
         Vector3 myPos = CameraMain(local);
         if (eHead != Vector3::zero() && myPos != Vector3::zero())
+        {
+            aik360Orig = GetCurrentRotation(local);
             game_sdk->set_aim(local, GetRotationToTheLocation(eHead, 0.1f, myPos));
+            aik360Ghost = true;
+        }
     }
 
-    // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
-    if (!AikInit()) { aikDbgSt = 11; return; }
+    // strike phase split into its own function so EVERY exit path below
+    // (gate 6/7/8/10/11/12/13/14/15, refused strike) still hands the aim
+    // back — Elite AimRotationGhost_End runs right after the fire call.
+    AikStrikePhase(local, enemy);
 
-    void *weapon = aik.GetWeaponOnHand(local);
-    if (!weapon) { aikDbgSt = 6; return; }
-    if (!AikIsValidGun(weapon)) { aikDbgSt = 7; return; } // Elite IsValidGun gate
-    if (!AikInRange(local, enemy, weapon)) { aikDbgSt = 8; return; } // Elite range gate
-
-    // hit-object scratch = the local player's objectPool (Android _HitObjectInfoWp)
-    void *objectPool = *(void **)((uint64_t)local + OFF_Zexis_Player_ObjectPool);
-    if (!objectPool) { aikDbgSt = 10; return; }
-
-    Vector3 localHead;
-    if (!AikHeadPos(local, &localHead)) { aikDbgSt = 10; return; }
-
-    // Elite AimkillSendStrike ("00" Send): hit-scratch fill -> hit hash ->
-    // CheckParametros -> shuffle-validate -> StartFiring -> msg 106 with
-    // RealDamageValue=HP / DamageValue=baseDamage|(1<<24) / back-area on ->
-    // StopFire. AikStrike sends the packet itself and does aikDbgSent++.
-    int hpBefore = game_sdk->GetHp(enemy);
-    aikDbgSt = 11; // provisional: AikStrike overwrites with the exact gate
-    if (!AikStrike(local, weapon, objectPool, localHead, enemy))
-        return; // aikDbgSt = exact refusal code (12/13/14/15/7) set in AikStrike
-    aikDbgSt = 9; // packet sent
-    // Elite AimkillRefreshAfterKill: SwapWeapon 1/2 + reset after a confirmed kill
-    if (game_sdk->GetHp(enemy) < hpBefore ||
-        (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)))
-        AikRefreshAfterKill(local);
+    if (aik360Ghost)
+        game_sdk->set_aim(local, aik360Orig); // Elite AimRotationGhost_End
 }
 
 // ==== Send108 — zexisyy part 2 verbatim (AimKill -> Vars.AimKillSend) =======
