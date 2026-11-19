@@ -1,6 +1,7 @@
 #import "vinhtran.hpp"
 #import "loading.hxx"
 #include <fstream>
+#include <chrono> // needed by Telekill +7 m pin (L~1154) — top-level so it's in scope everywhere
 #define FMT_HEADER_ONLY
 #include "fmt/core.h"
 
@@ -1151,10 +1152,38 @@ void *GetClosestEnemyForTelekill()
 }
 
 // ---- Telekill: teleport yourself next to the closest enemy ----
+// +7 m arrival (nfs l-"+7 metro" dyal Tele Mark): l-frame lwla tkherej
+// 7 m FOQ l-3dou, tmsk 500 ms, morah tSll w tni3 level dyalo (glue 3adi).
+// g_tkAir: 0 = re-arm (toggle off) / 1 = +7 m pin / 2 = released.
+static int g_tkAir = 0;
+static Vector3 g_tkAirPos;
+static std::chrono::steady_clock::time_point g_tkAirStart;
 void RunTelekill()
 {
     if (!Vars.Telekill)
+    {
+        g_tkAir = 0; // toggle off -> l-enable jaya ybda b l-hop +7 m
         return;
+    }
+
+    // +7 m pin hold — kaymchi hta ila l-3dou t7a / mache (kima pin dyal
+    // Tele Mark: RunMarkTP), w kaytSll 3la 500 ms bla maysenni l-3dou
+    if (g_tkAir == 1)
+    {
+        long long tkMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - g_tkAirStart)
+                             .count();
+        if (tkMs < 500)
+        {
+            void *pinMatch = game_sdk->Curent_Match();
+            void *pinLocal = pinMatch ? game_sdk->GetLocalPlayer(pinMatch) : nullptr;
+            void *pinTf = pinLocal ? game_sdk->Component_GetTransform(pinLocal) : nullptr;
+            if (pinTf)
+                Transform_SetPosition(pinTf, g_tkAirPos); // glued at +7 m
+            return;
+        }
+        g_tkAir = 2; // release -> yti7 7 m w morah glue 3adi 3la niveau dyalo
+    }
 
     void *closestEnemyForTelekill = GetClosestEnemyForTelekill();
     if (!closestEnemyForTelekill)
@@ -1192,7 +1221,18 @@ void RunTelekill()
         targetPos.z -= forward.z * dist;
     }
 
-    Transform_SetPosition(_LocalTF, targetPos);
+    if (g_tkAir == 0)
+    {
+        // first frame: land +7 m above the spot, hold 500 ms, then drop
+        g_tkAirPos = targetPos;
+        g_tkAirPos.y += 7.0f;
+        g_tkAirStart = std::chrono::steady_clock::now();
+        g_tkAir = 1;
+        Transform_SetPosition(_LocalTF, g_tkAirPos);
+        return;
+    }
+
+    Transform_SetPosition(_LocalTF, targetPos); // released: normal side glue
 }
 
 // ===========================================================================
@@ -1827,7 +1867,6 @@ static void *g_dmg99 = nullptr;
 //  Fly Op / Stop Time / Mark TP / AimKill cover
 //  Every offset dump-verified vs THIS build's dump.cs (fail-closed).
 // ============================================================
-#include <chrono>
 #include <math.h>
 
 // ---- FLY OP (user snippet "FLY HACK OP" — ported to iOS) --------------------
@@ -2391,7 +2430,8 @@ static bool TeleportToMark(Vector3 target)
 // ---- RunMarkTP: Tele Mark (manual one-shot) + Auto Mark (Fight gate) --------
 // Tele Mark: check -> one TP to my map mark; no mark -> auto-uncheck (Elite
 // auto-clears too).  Auto Mark: ECSMatchPhase == 2 once per round -> TP to the
-// mark + pin 1.5 s (Elite AutoEnableTPOnPhase2 + ExecuteGliderMarkTP 1500 ms).
+// mark + pin 1500 ms AT +7 m (user: nfs l-"+7 metro" dyal Tele Mark), then
+// drop onto the mark (Elite AutoEnableTPOnPhase2 + ExecuteGliderMarkTP).
 // g_markDbg bits: 1 = tele done / 2 = auto fired / 4 = pin active.
 static bool g_tmDone = false;
 static bool g_amFired = false;
@@ -2484,8 +2524,8 @@ void RunMarkTP()
             if (tf)
             {
                 Vector3 pin = g_amTarget;
-                pin.y += 1.5f;
-                Transform_SetPosition(tf, pin); // glued to the mark (anti-knockback)
+                pin.y += 7.0f; // user: nfs l-"+7 metro" dyal Tele Mark
+                Transform_SetPosition(tf, pin); // glued at +7 m (anti-knockback)
             }
             g_markDbg |= 4;
         }

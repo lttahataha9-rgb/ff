@@ -651,6 +651,7 @@ ImFont* Urbanist;
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
                         ImGui::TextDisabled("AimKill / AimKill 360 / Telekill / Down Kill V2");
                         ImGui::TextDisabled("360 = t9tel bla manchouf fih (aim wraya)");
+                        ImGui::TextDisabled("+7 m hop: Tele Mark / Auto Mark / Telekill");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
                         if (g_rgState == 1)
