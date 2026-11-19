@@ -75,8 +75,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_AIMKILL360 = 4, FLTBTN_STOPTIME = 5, FLTBTN_FLYOP = 6, FLTBTN_FLYJUP = 7, FLTBTN_AUTOMARK = 8, FLTBTN_TELEMARK = 9, FLTBTN_DOWNKILL2 = 10, FLTBTN_GHOST = 11, FLTBTN_COUNT = 12 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_AIMKILL360 = 4, FLTBTN_STOPTIME = 5, FLTBTN_FLYOP = 6, FLTBTN_FLYJUP = 7, FLTBTN_AUTOMARK = 8, FLTBTN_TELEMARK = 9, FLTBTN_DOWNKILL2 = 10, FLTBTN_GHOST = 11, FLTBTN_FLYAUTO = 12, FLTBTN_COUNT = 13 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -120,6 +120,7 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     // ---- lounat JDADE (user: "DIRE LWN JDADE B L BOTON") — 4 boutonat jdad ----
     ImVec4(0.13f, 0.88f, 0.80f, 1.00f), // DOWNKILL2- ferrouj (teal)
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
+    ImVec4(1.00f, 0.35f, 0.70f, 1.00f), // FLYAUTO  - wardi (pink, fly family — RIOSSM FLYAUTO)
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -518,6 +519,9 @@ ImFont* Urbanist;
                 case FLTBTN_GHOST:
                     DrawFloatingButton(i, oxorany("Ghost"), &Vars.Ghost);
                     break;
+                case FLTBTN_FLYAUTO:
+                    DrawFloatingButton(i, oxorany("FLYAUTO"), &Vars.FlyAuto); // RIOSSM label
+                    break;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
@@ -609,6 +613,11 @@ ImFont* Urbanist;
                             if (ImGui::Checkbox(oxorany("Button Ghost"), &Vars.Ghost)) gFltShow[FLTBTN_GHOST] = Vars.Ghost;
                         }
                         ImGui::EndTable();
+                        // ---- FLY AUTO (RIOSSM 261 "flyair") — labels dyalo ----
+                        ImGui::Spacing();
+                        if (ImGui::Checkbox(oxorany("Button FLYAUTO"), &Vars.FlyAuto)) gFltShow[FLTBTN_FLYAUTO] = Vars.FlyAuto;
+                        ImGui::SliderFloat(oxorany("SPEED AUTO"), &Vars.FlyAutoSpeed, 0.0f, 0.5f, "%.2f v"); // RIOSSM: 0..0.5, default 0.110
+                        ImGui::SliderFloat(oxorany("DELAY AUTO"), &Vars.FlyAutoDelay, 0.0f, 10.0f, "%.1f v"); // RIOSSM: 0..10 s, default 1.8 -> auto-off
                         ImGui::TextDisabled("Stop Time = freeze / Down = ta7t l'ard / Ghost = underground");
                         ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
                         ImGui::EndTabItem();
@@ -646,6 +655,7 @@ ImFont* Urbanist;
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
                         ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
+                        ImGui::TextDisabled("FLY AUTO = SPEED AUTO rise, DELAY AUTO s then auto-off");
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
@@ -677,6 +687,7 @@ ImFont* Urbanist;
             RunFly();
             RunFlyV2();
             RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
+            RunFlyAuto(io.DeltaTime); // FLY AUTO (RIOSSM flyair): rise + DELAY auto-off
             RunFlyJump(io.DeltaTime); // FLY JUMP v2: HIS jump -> +2 m step
             RunStopTime();
             RunDownKillV2();

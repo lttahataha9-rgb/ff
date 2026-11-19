@@ -42,6 +42,10 @@ struct Vars_t
     // ---- ported from Android EliteXzp (the "Elite" project) ----
     bool FlyOp = {};       // FLY OP (user snippet "FLY HACK OP"): +0.10 m/frame rise (iOS port)
     bool FlyJump = {};     // FLY JUMP v2: HIS jump -> +2 m step ("ytl3ni darj")
+    // ---- FLY AUTO (ported from RIOSSM 261 "_no_login.dylib", key "flyair") ----
+    bool FlyAuto = {};           // FLYAUTO switch (RIOSSM g_flyAir): rise + self auto-off
+    float FlyAutoSpeed = 0.11f;  // "SPEED AUTO" slider 0..0.5 (RIOSSM default 0.110)
+    float FlyAutoDelay = 1.8f;   // "DELAY AUTO" slider 0..10 s (RIOSSM default 1.8)
     bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
     bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
     bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
@@ -1902,6 +1906,59 @@ void RunFlyOp(float dt)
     float step = (dt > 0.0f && dt < 0.25f) ? dt : 0.016f;
     pos.y += 6.0f * step;
     Transform_SetPosition(tf, pos);
+}
+
+// ---- FLY AUTO (ported from RIOSSM 261 "_no_login.dylib", key "flyair", -------
+// button label FLYAUTO / section AIRFLY, sliders "SPEED AUTO" + "DELAY AUTO").
+// RIOSSM behavior (func 00077ed0, called every frame from func 0007ac74):
+//   gate = "Enable Cheats" master checkbox AND g_flyAir (the FLYAUTO switch)
+//   y += SPEED (0.110 m per tick @60 fps, x/z untouched — the two horizontal
+//   params 0x51EA74/0x51EA7C are NEVER written = 0.0), elapsed += dt from a
+//   steady_clock; when elapsed >= DELAY the feature turns ITSELF off
+//   (g_flyAir = 0, elapsed = 0) and the iOS switch snaps back to OFF.
+// Here: same math, dt-normalized (speed * 60 = m/s so it feels identical at
+// 60 and 120 Hz), the RIOSSM "Enable Cheats" gate = his lobby guard
+// (get_MaxHP <= 0 -> don't run), and auto-off clears Vars.FlyAuto so the
+// floating switch goes OFF by itself (gFltShow stays latched = button stays).
+static float g_faElapsed = 0.0f;
+void RunFlyAuto(float dt)
+{
+    if (!Vars.FlyAuto)
+    {
+        g_faElapsed = 0.0f;
+        return;
+    }
+    if (Vars.Flyingtest)
+        return; // exclusive: FlyV2 owns Y (same rule as Fly Op)
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+    {
+        g_faElapsed = 0.0f;
+        return;
+    }
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_faElapsed = 0.0f;
+        return; // lobby / dead (RIOSSM: "Enable Cheats" gate)
+    }
+    void *tf = game_sdk->Component_GetTransform(local);
+    if (!tf)
+        return;
+    Vector3 pos = game_sdk->get_position(tf);
+    if (pos == Vector3::zero())
+        return;
+    float step = (dt > 0.0f && dt < 0.25f) ? dt : 0.016f; // clamped dt = safety
+    float speed = clamp(Vars.FlyAutoSpeed, 0.0f, 0.5f);
+    pos.y += speed * 60.0f * step; // RIOSSM: +speed per frame @60 Hz
+    Transform_SetPosition(tf, pos);
+    // DELAY AUTO: fly for N seconds then auto-off (RIOSSM: elapsed >= limit)
+    g_faElapsed += step;
+    if (g_faElapsed >= clamp(Vars.FlyAutoDelay, 0.0f, 10.0f))
+    {
+        g_faElapsed = 0.0f;
+        Vars.FlyAuto = false; // self-off: l'iOS switch f l'écran yweli OFF
+    }
 }
 
 // ---- FLY JUMP v2 (user: "bghit fly jump mnin nqez ytl3ni b darajat, --------
