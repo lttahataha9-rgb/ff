@@ -1,7 +1,7 @@
 #import "vinhtran.hpp"
 #import "loading.hxx"
 #include <fstream>
-#include <chrono> // needed by Telekill +7 m pin (L~1154) — top-level so it's in scope everywhere
+#include <chrono> // needed by Telekill +15 m pin (L~1154) — top-level so it's in scope everywhere
 #define FMT_HEADER_ONLY
 #include "fmt/core.h"
 
@@ -46,6 +46,7 @@ struct Vars_t
     float FlyAutoDelay = 1.8f;   // "DELAY AUTO" slider 0..10 s (RIOSSM default 1.8)
     bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
     bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
+    bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + pin (user: "RJ33-HA")
     // ---- AUTO MARK 00 + KILL 360 (ported from RIOSSM 261 "_no_login.dylib") ----
     // (AimKillSend / AimKill360 / AutoMark REMOVED — user: "THYD 360 W SEND W AUTO MARK")
     bool AutoMark00 = {};     // RIOSSM "AUTO MARK 00" = autounderground: delay -> approach
@@ -1165,9 +1166,9 @@ void *GetClosestEnemyForTelekill()
 }
 
 // ---- Telekill: teleport yourself next to the closest enemy ----
-// +7 m arrival (nfs l-"+7 metro" dyal Tele Mark): l-frame lwla tkherej
-// 7 m FOQ l-3dou, tmsk 500 ms, morah tSll w tni3 level dyalo (glue 3adi).
-// g_tkAir: 0 = re-arm (toggle off) / 1 = +7 m pin / 2 = released.
+// +15 m arrival (nfs l-"+15 metro" dyal Tele Mark): l-frame lwla tkherej
+// 15 m FOQ l-3dou, tmsk 500 ms, morah tSll w tni3 level dyalo (glue 3adi).
+// g_tkAir: 0 = re-arm (toggle off) / 1 = +15 m pin / 2 = released.
 static int g_tkAir = 0;
 static Vector3 g_tkAirPos;
 static std::chrono::steady_clock::time_point g_tkAirStart;
@@ -1175,11 +1176,11 @@ void RunTelekill()
 {
     if (!Vars.Telekill)
     {
-        g_tkAir = 0; // toggle off -> l-enable jaya ybda b l-hop +7 m
+        g_tkAir = 0; // toggle off -> l-enable jaya ybda b l-hop +15 m
         return;
     }
 
-    // +7 m pin hold — kaymchi hta ila l-3dou t7a / mache (kima pin dyal
+    // +15 m pin hold — kaymchi hta ila l-3dou t7a / mache (kima pin dyal
     // Tele Mark: RunMarkTP), w kaytSll 3la 500 ms bla maysenni l-3dou
     if (g_tkAir == 1)
     {
@@ -1192,10 +1193,10 @@ void RunTelekill()
             void *pinLocal = pinMatch ? game_sdk->GetLocalPlayer(pinMatch) : nullptr;
             void *pinTf = pinLocal ? game_sdk->Component_GetTransform(pinLocal) : nullptr;
             if (pinTf)
-                Transform_SetPosition(pinTf, g_tkAirPos); // glued at +7 m
+                Transform_SetPosition(pinTf, g_tkAirPos); // glued at +15 m
             return;
         }
-        g_tkAir = 2; // release -> yti7 7 m w morah glue 3adi 3la niveau dyalo
+        g_tkAir = 2; // release -> yti7 15 m w morah glue 3adi 3la niveau dyalo
     }
 
     void *closestEnemyForTelekill = GetClosestEnemyForTelekill();
@@ -1236,9 +1237,9 @@ void RunTelekill()
 
     if (g_tkAir == 0)
     {
-        // first frame: land +7 m above the spot, hold 500 ms, then drop
+        // first frame: land +15 m above the spot, hold 500 ms, then drop
         g_tkAirPos = targetPos;
-        g_tkAirPos.y += 7.0f;
+        g_tkAirPos.y += 15.0f; // user: +7 m -> +15 m
         g_tkAirStart = std::chrono::steady_clock::now();
         g_tkAir = 1;
         Transform_SetPosition(_LocalTF, g_tkAirPos);
@@ -2452,21 +2453,21 @@ void RunResetGuest()
 // "filet de securite: jamais bloque en glide" safety clears). Holding the
 // spoof true for 500 ms makes the game run fold-wing-glide logic
 // (movement/camera/state machine) with NO real glide started -> CRASH.
-// FIX: no hook, no spoof at all — the +7 m is held by the plain per-frame pin
+// FIX: no hook, no spoof at all — the +15 m is held by the plain per-frame pin
 // below (same mechanism as Auto Mark's proven 1.5 s pin, never crashed), and
 // the teleport itself worked WITHOUT any spoof before the 7 m change
 // (430e8d2) — the pin re-asserts the position every frame anyway.
 
-// shared +7 m pin (Tele Mark): hold the arrival spot for
+// shared +15 m pin (Tele Mark): hold the arrival spot for
 // 500 ms (PLAIN Transform_SetPosition, NO spoof — crash fix) so clamp /
-// knockback cannot eat the 7 m, then release -> the game drops us ON the mark
+// knockback cannot eat the 15 m, then release -> the game drops us ON the mark
 // (user: "ay blas n teleporta liha khaso ytipini fou9ha b 7 m").
 static bool g_tpPin = false;
 static Vector3 g_tpPinPos;
 static std::chrono::steady_clock::time_point g_tpPinStart;
 
 // ---- TeleportToMark (Elite ExecuteTeleMark sequence) ------------------------
-// hop +50 then arrive exactly +7 m above the target (mark), HOLD 500 ms with
+// hop +50 then arrive exactly +15 m above the target (mark), HOLD 500 ms with
 // the plain pin, then release -> drop onto the mark. NO glide spoof (crash fix).
 static bool TeleportToMark(Vector3 target)
 {
@@ -2486,9 +2487,9 @@ static bool TeleportToMark(Vector3 target)
     up.y += 50.0f;
     Transform_SetPosition(tf, up); // Elite: hop first (anti ground-clamp)
     Vector3 dst = target;
-    dst.y += 7.0f;
+    dst.y += 15.0f; // user: +7 m -> +15 m (Tele Mark / Auto Mark share this)
     Transform_SetPosition(tf, dst);
-    g_tpPin = true; // hold +7 m for 500 ms, then drop onto the mark
+    g_tpPin = true; // hold +15 m for 500 ms, then drop onto the mark
     g_tpPinPos = dst;
     g_tpPinStart = std::chrono::steady_clock::now();
     return true;
@@ -2496,15 +2497,21 @@ static bool TeleportToMark(Vector3 target)
 
 // ---- RunMarkTP: Tele Mark (manual one-shot) + Auto Mark (Fight gate) --------
 // Tele Mark: check -> one TP to my map mark; no mark -> auto-uncheck (Elite
-// auto-clears too).  (Auto Mark REMOVED — replaced by RIOSSM "AUTO MARK 00".)
-// g_markDbg bit: 1 = tele done.
+// auto-clears too).  Auto Mark (RESTORED, user "Rj33-ha m3a l-hop"): ECSMatchPhase
+// == 2 once per round -> TP to the mark + pin 1500 ms AT +15 m, then drop onto
+// the mark (Elite AutoEnableTPOnPhase2 + ExecuteGliderMarkTP).
+// g_markDbg bits: 1 = tele done / 2 = auto fired / 4 = pin active.
 static bool g_tmDone = false;
+static bool g_amFired = false;
+static bool g_amPin = false;
+static Vector3 g_amTarget; // plain static (zero-init) - ma ndirch dynamic init f load time
+static std::chrono::steady_clock::time_point g_amStart;
 static int g_markDbg = 0;
 void RunMarkTP()
 {
     g_markDbg = 0;
 
-    // shared +7 m pin: hold the TP arrival (Tele Mark) for
+    // shared +15 m pin: hold the TP arrival (Tele Mark) for
     // 500 ms with PLAIN position sets (NO glide spoof — crash fix), then
     // release -> normal physics drop us ON the mark
     if (g_tpPin)
@@ -2514,7 +2521,7 @@ void RunMarkTP()
                              .count();
         if (tpMs >= 500)
         {
-            g_tpPin = false; // pin off -> fall the last 7 m
+            g_tpPin = false; // pin off -> fall the last 15 m
         }
         else
         {
@@ -2522,7 +2529,7 @@ void RunMarkTP()
             void *tpLocal = tpMatch ? game_sdk->GetLocalPlayer(tpMatch) : nullptr;
             void *tpTf = tpLocal ? game_sdk->Component_GetTransform(tpLocal) : nullptr;
             if (tpTf)
-                Transform_SetPosition(tpTf, g_tpPinPos); // glued at +7 m
+                Transform_SetPosition(tpTf, g_tpPinPos); // glued at +15 m
         }
     }
 
@@ -2541,6 +2548,58 @@ void RunMarkTP()
     }
     if (g_tmDone)
         g_markDbg |= 1;
+
+    // ---- Auto Mark (Elite AutoEnableTPOnPhase2) — RESTORED (user "Rj33-ha") ----
+    // phase==2 (Fight) once per round -> TP to my mark + hold 1500 ms AT +15 m
+    // (hop l-jdid: 7 m -> 15 m, user "dik 7 m ... raddha 15 m"), then drop.
+    if (!Vars.AutoMark)
+    {
+        g_amFired = false;
+        g_amPin = false;
+        return;
+    }
+    void *scene = GetInGameUIScene();
+    uint32_t phase = scene ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18")) : 0;
+    if (phase != 2)
+    {
+        g_amFired = false; // new round -> re-arm (Elite resets at phase != 2)
+        g_amPin = false;
+        return;
+    }
+    if (!g_amFired)
+    {
+        Vector3 mark = MarkedLoc();
+        if (mark != Vector3::zero() && TeleportToMark(mark))
+        {
+            g_amFired = true;
+            g_amTarget = mark;
+            g_amPin = true;
+            g_amStart = std::chrono::steady_clock::now();
+        }
+        return; // waiting for the mark - retried every frame
+    }
+    g_markDbg |= 2;
+    if (g_amPin)
+    {
+        long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - g_amStart)
+                           .count();
+        if (ms >= 1500)
+            g_amPin = false; // Elite: 1500 ms then release (land on the mark)
+        else
+        {
+            void *amMatch = game_sdk->Curent_Match();
+            void *amLocal = amMatch ? game_sdk->GetLocalPlayer(amMatch) : nullptr;
+            void *amTf = amLocal ? game_sdk->Component_GetTransform(amLocal) : nullptr;
+            if (amTf)
+            {
+                Vector3 pin = g_amTarget;
+                pin.y += 15.0f; // user: 7 m -> 15 m
+                Transform_SetPosition(amTf, pin); // glued at +15 m (anti-knockback)
+            }
+            g_markDbg |= 4;
+        }
+    }
 }
 
 // ---- AUTO MARK 00 (RIOSSM 261 "_no_login.dylib", key "autounderground") --------

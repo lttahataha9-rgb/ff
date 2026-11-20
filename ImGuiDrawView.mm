@@ -75,10 +75,11 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-// RIOSSM port (user: "THYD 360 W SEND W AUTO MARK" + "TZID AUTO MARK 00 W KILL 360"):
-// Send / 360 / Auto Mark removed -> AUTO MARK 00 + KILL 360 jdod b l3barat RIOSSM.
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_FLYJUP = 5, FLTBTN_TELEMARK = 6, FLTBTN_DOWNKILL2 = 7, FLTBTN_GHOST = 8, FLTBTN_FLYAUTO = 9, FLTBTN_AUTO00 = 10, FLTBTN_KILL360 = 11, FLTBTN_COUNT = 12 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+// RIOSSM port (user: "THYD 360 W SEND W AUTO MARK" + "TZID AUTO MARK 00 W KILL 360"
+// + "TRD LYA L AUTO MARK KIF MA KAN"): Send / 360 mchaw, AUTO MARK 00 + KILL 360
+// zado, w Auto Mark l-9dima RJA3T (user: "Rj33-ha m3a l-hop (7 -> 15)").
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_FLYJUP = 5, FLTBTN_TELEMARK = 6, FLTBTN_AUTOMARK = 7, FLTBTN_DOWNKILL2 = 8, FLTBTN_GHOST = 9, FLTBTN_FLYAUTO = 10, FLTBTN_AUTO00 = 11, FLTBTN_KILL360 = 12, FLTBTN_COUNT = 13 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -116,11 +117,12 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYOP    - 7amra (fly family, snippet)
     ImVec4(0.75f, 1.00f, 0.20f, 1.00f), // FLYJUP   - chartreuse (jump = energy)
     ImVec4(0.25f, 0.60f, 1.00f, 1.00f), // TELEMARK - azr9 (teleport)
+    ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (kif kan l-9dim)
     ImVec4(0.13f, 0.88f, 0.80f, 1.00f), // DOWNKILL2- ferrouj (teal)
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
     ImVec4(1.00f, 0.35f, 0.70f, 1.00f), // FLYAUTO  - wardi (pink, fly family — RIOSSM FLYAUTO)
     // ---- lounat RIOSSM (port jdod: AUTO MARK 00 + KILL 360) ----
-    ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTO MARK 00 - orange (RIOSSM autounderground)
+    ImVec4(0.58f, 0.32f, 1.00f, 1.00f), // AUTO MARK 00 - violet (RIOSSM autounderground)
     ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // KILL 360     - cyan (RIOSSM aimkilltestv2)
 };
 
@@ -511,6 +513,9 @@ ImFont* Urbanist;
                 case FLTBTN_TELEMARK:
                     DrawFloatingButton(i, oxorany("Tele Mark"), &Vars.TeleMark);
                     break;
+                case FLTBTN_AUTOMARK: // restored (user "Rj33-ha m3a l-hop")
+                    DrawFloatingButton(i, oxorany("Auto Mark"), &Vars.AutoMark);
+                    break;
                 case FLTBTN_DOWNKILL2:
                     DrawFloatingButton(i, oxorany("Down Kill V2"), &Vars.DownKillV2);
                     break;
@@ -625,7 +630,7 @@ ImFont* Urbanist;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Button AUTO MARK 00"), &Vars.AutoMark00)) gFltShow[FLTBTN_AUTO00] = Vars.AutoMark00;
+                            if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
                         }
                         ImGui::EndTable();
                         // ported round 2 (Elite): DOWN KILL V1/V2 + GHOST
@@ -644,6 +649,7 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DELAY AUTO"), &Vars.FlyAutoDelay, 0.0f, 10.0f, "%.1f v"); // RIOSSM: 0..10 s, default 1.8 -> auto-off
                         ImGui::Spacing();
                         // ---- AUTO MARK 00 (RIOSSM "autounderground") — labels dyalo ----
+                        if (ImGui::Checkbox(oxorany("Button AUTO MARK 00"), &Vars.AutoMark00)) gFltShow[FLTBTN_AUTO00] = Vars.AutoMark00;
                         ImGui::SliderFloat(oxorany("SPEED 00"), &Vars.Am00Speed, 0.0f, 0.05f, "%.3f"); // RIOSSM: clamp 0..0.05 m/tick
                         ImGui::SliderFloat(oxorany("DELAY 00"), &Vars.Am00Delay, 0.0f, 10.0f, "%.1f s"); // RIOSSM: delay qbel ma ybda
                         ImGui::SliderFloat(oxorany("RADIUS 00"), &Vars.Am00Radius, 2.0f, 60.0f, "%.0f m"); // 3douwwa li9rib f had l-mssa7a
@@ -680,7 +686,7 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
-                        ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
+                        ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark / Auto Mark");
                         ImGui::TextDisabled("FLY AUTO = SPEED AUTO rise, DELAY AUTO s then auto-off");
                         ImGui::TextDisabled("AUTO MARK 00 = DELAY -> mchi l-3douwwa li9rib f RADIUS (b SPEED)");
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
@@ -688,7 +694,7 @@ ImFont* Urbanist;
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
                         ImGui::TextDisabled("AIMKILL 360 / Telekill / Down Kill V2");
                         ImGui::TextDisabled("AIMKILL 360 = t9tel bla manchouf fih (aim wraya)");
-                        ImGui::TextDisabled("+7 m hop: Tele Mark / Telekill");
+                        ImGui::TextDisabled("+15 m hop: Tele Mark / Auto Mark / Telekill");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
                         if (g_rgState == 1)
