@@ -32,8 +32,6 @@ struct Vars_t
 
     // ---- ported from X96 2Ripper: Telekill / Fly V2 / Ninja Run ----
     bool Telekill = {};
-    bool AimKillSend = {}; // SEND button: crafts the game's own C2S damage packet (Android EliteXzp port)
-    bool AimKill360 = {};  // AIMKILL 360: rotate toward target so the hit registers (Elite Aimkill360)
     bool fly = {};        // RUNN (ninja run)
     bool Flyingtest = {}; // Fly V2
     float flySpeed = 0.75f;
@@ -48,7 +46,18 @@ struct Vars_t
     float FlyAutoDelay = 1.8f;   // "DELAY AUTO" slider 0..10 s (RIOSSM default 1.8)
     bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
     bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
-    bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
+    // ---- AUTO MARK 00 + KILL 360 (ported from RIOSSM 261 "_no_login.dylib") ----
+    // (AimKillSend / AimKill360 / AutoMark REMOVED — user: "THYD 360 W SEND W AUTO MARK")
+    bool AutoMark00 = {};     // RIOSSM "AUTO MARK 00" = autounderground: delay -> approach
+    float Am00Speed = 0.05f;  // SPEED 00 0..0.05 m/tick (RIOSSM clamps the speed to 0.05)
+    float Am00Delay = 1.5f;   // DELAY 00 s — qbel ma ybda l-approach (RIOSSM delay)
+    float Am00Radius = 12.0f; // RADIUS 00 m — l-3douwwa lazem tkoun f had l-mssa7a
+    float Am00Run = 3.0f;     // RUN 00 s — mdda dyal l-approach qbel ma y3awed (RIOSSM cycle)
+    int   Am00Dbg = 0;      // telemetry: 1 = delay / 2 = approach / 3 = 3douwwa b3ida
+    bool Kill360 = {};        // RIOSSM "AIMKILL 360" = aimkilltestv2 (his own aimkill mech.)
+    float K360Speed = 1.0f;   // SPEED 360 0..1 (RIOSSM float clamped 0..1) -> cadence
+    int   K360Count = 5;      // COUNT 360 1..10 (RIOSSM int clamped 1..10) -> strikes/burst
+    float K360Delay = 0.0f;   // DELAY 360 s — pause ba3d l-burst (RIOSSM rate-limit; 0 = fda7la)
     // (Fly Ultra sliders removed — user: "t7iyed Fix Fly w Fly Ultra")
     // ---- ported from Android EliteXzp round 2 (user: "DOWN KILL + V2, FLY FIX, GHOST") ----
     bool DownKillV2 = {};  // DOWN KILL V2: smooth -0.4/f descent to -2.5 m, restore off
@@ -1392,7 +1401,8 @@ static bool AikInRange(void *local, void *enemy, void *weapon)
 // Telemetry: st = last StartAimkill gate (1 ran / 2 no-match / 3 not-live /
 // 4 no-enemy / 5 enemy-fail / 6 no-gun / 7 not-a-gun / 8 out-of-range /
 // 9 SENT / 10 no-pool-or-head / 11 AikInit fail / 12 no-checkParams /
-// 13 no-damage-msg / 14 strike gate / 15 no-TimeService), n = 1 when a
+// 13 no-damage-msg / 14 strike gate / 15 no-TimeService / 16 rate-limited
+// (KILL 360 burst cooldown), n = 1 when a
 // target is acquired, s = packets sent (Elite AimkillSendStrike path).
 // Shown in the FEATURES tab.
 static int aikDbgSt = 0, aikDbgN = 0, aikDbgSent = 0;
@@ -1699,7 +1709,7 @@ static void AikRefreshAfterKill(void *local)
 // Spot-checked against ffdump/dump.cs: every RVA below exists in this dump and
 // class EOBFCLNNIJH (namespace "message") has fields +0x14/+0x18 with ctor
 // 0x277189C. Fail-closed: nothing here is guessed for other builds.
-// Adaptations only (no logic changes): Vars.AimKillSend = their AimKill,
+// Adaptations only (no logic changes): the Send button was REMOVED (RIOSSM port),
 // aikDbgSt/aikDbgN/aikDbgSent lines for the FEATURES panel, g_dmg99 as a
 // local static cache (their project global), and UnitySym/FindGameClass
 // implemented over dlsym(RTLD_DEFAULT) — same il2cpp chain as AikShuffleValidate.
@@ -2486,15 +2496,9 @@ static bool TeleportToMark(Vector3 target)
 
 // ---- RunMarkTP: Tele Mark (manual one-shot) + Auto Mark (Fight gate) --------
 // Tele Mark: check -> one TP to my map mark; no mark -> auto-uncheck (Elite
-// auto-clears too).  Auto Mark: ECSMatchPhase == 2 once per round -> TP to the
-// mark + pin 1500 ms AT +7 m (user: nfs l-"+7 metro" dyal Tele Mark), then
-// drop onto the mark (Elite AutoEnableTPOnPhase2 + ExecuteGliderMarkTP).
-// g_markDbg bits: 1 = tele done / 2 = auto fired / 4 = pin active.
+// auto-clears too).  (Auto Mark REMOVED — replaced by RIOSSM "AUTO MARK 00".)
+// g_markDbg bit: 1 = tele done.
 static bool g_tmDone = false;
-static bool g_amFired = false;
-static bool g_amPin = false;
-static Vector3 g_amTarget; // plain static (zero-init) - ma ndirch dynamic init f load time
-static std::chrono::steady_clock::time_point g_amStart;
 static int g_markDbg = 0;
 void RunMarkTP()
 {
@@ -2537,55 +2541,93 @@ void RunMarkTP()
     }
     if (g_tmDone)
         g_markDbg |= 1;
+}
 
-    // ---- Auto Mark (Elite AutoEnableTPOnPhase2) ----
-    if (!Vars.AutoMark)
+// ---- AUTO MARK 00 (RIOSSM 261 "_no_login.dylib", key "autounderground") --------
+// RIOSSM chain (RE): g_autounderground -> scheduler -> delay timer -> ug_fire ->
+// action func: l9a aqreb 3douwwa HYA f l-radius -> qbelha delay -> MOVE l-player
+// nihaya l-ih b-speed maqtrouda (max 0.05 m/tick) l-mdda -> kay-w9ef w y3awed.
+// Had ports b nafs l-3ibarat: DELAY 00 -> RADIUS 00 -> SPEED 00 -> RUN 00 -> cycle.
+static float g_am00Wait = 0.f;  // delay accumulator (RIOSSM 0x51EA28 timer)
+static float g_am00RunT = 0.f;  // approach duration (RIOSSM 0x51EA44/0x51EA50)
+static bool  g_am00Act = false; // running? (RIOSSM 0x51EA54)
+
+// nearest LIVING enemy (no team / no dead / no down) — returns null f lobby
+static void *AutoMark00Enemy(void *local)
+{
+    if (!local) return nullptr;
+    void *enemy = GetClosestEnemyAik();
+    if (!enemy || enemy == local) return nullptr;
+    if (!game_sdk->Component_GetTransform(enemy)) return nullptr;
+    if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(enemy)) return nullptr;
+    if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(enemy)) return nullptr;
+    if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)) return nullptr;
+    if (game_sdk->GetHp(enemy) <= 0) return nullptr;
+    return enemy;
+}
+
+void RunAutoMark00(float dt)
+{
+    if (!Vars.AutoMark00)
     {
-        g_amFired = false;
-        g_amPin = false;
+        g_am00Wait = 0.f;
+        g_am00RunT = 0.f;
+        g_am00Act = false;
+        Vars.Am00Dbg = 0;
         return;
     }
-    void *scene = GetInGameUIScene();
-    uint32_t phase = scene ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18")) : 0;
-    if (phase != 2)
+    // lobby / not-live guard — same "Enable Cheats" gate as RIOSSM
+    void *match = game_sdk->Curent_Match();
+    void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
+    void *tf = local ? game_sdk->Component_GetTransform(local) : nullptr;
+    if (!tf || !game_sdk->get_MaxHP || game_sdk->get_MaxHP(local) <= 0 ||
+        (game_sdk->get_IsDieing && game_sdk->get_IsDieing(local)))
     {
-        g_amFired = false; // new round -> re-arm (Elite resets at phase != 2)
-        g_amPin = false;
+        g_am00Wait = 0.f;
+        g_am00RunT = 0.f;
+        g_am00Act = false;
+        Vars.Am00Dbg = 0;
         return;
     }
-    if (!g_amFired)
+
+    void *enemy = AutoMark00Enemy(local);
+    if (!enemy) { Vars.Am00Dbg = 3; return; } // 3douwwa b3ida / ma-kaynach
+
+    Vector3 ep = game_sdk->get_position(game_sdk->Component_GetTransform(enemy));
+    Vector3 lp = game_sdk->get_position(tf);
+    float dx = ep.x - lp.x, dy = ep.y - lp.y, dz = ep.z - lp.z;
+    float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (dist > Vars.Am00Radius) { Vars.Am00Dbg = 3; return; } // RADIUS 00
+
+    if (!g_am00Act)
     {
-        Vector3 mark = MarkedLoc();
-        if (mark != Vector3::zero() && TeleportToMark(mark))
+        // ---- delay phase (RIOSSM timer) ----
+        if (g_am00Wait < Vars.Am00Delay)
         {
-            g_amFired = true;
-            g_amTarget = mark;
-            g_amPin = true;
-            g_amStart = std::chrono::steady_clock::now();
+            g_am00Wait += dt;
+            Vars.Am00Dbg = 1;
+            return;
         }
-        return; // waiting for the mark - retried every frame
+        g_am00Act = true;
+        g_am00RunT = 0.f;
     }
-    g_markDbg |= 2;
-    if (g_amPin)
+
+    // ---- approach phase: pos += dir * clamp(speed, 0, 0.05) ----
+    Vars.Am00Dbg = 2;
+    if (dist < 1.0f) { g_am00Act = false; g_am00Wait = 0.f; return; } // wsel
+    float step = Vars.Am00Speed;
+    if (step > 0.05f) step = 0.05f; // RIOSSM hard clamp
+    if (step < 0.0f) step = 0.0f;
+    float k = step / dist;
+    Vector3 np(lp.x + dx * k, lp.y + dy * k, lp.z + dz * k);
+    Transform_SetPosition(tf, np);
+
+    g_am00RunT += dt;
+    if (g_am00RunT >= Vars.Am00Run) // RUN 00 -> y-w9ef w y3awed mn l-asas
     {
-        long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - g_amStart)
-                           .count();
-        if (ms >= 1500)
-            g_amPin = false; // Elite: 1500 ms then release (land on the mark)
-        else
-        {
-            void *match = game_sdk->Curent_Match();
-            void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
-            void *tf = local ? game_sdk->Component_GetTransform(local) : nullptr;
-            if (tf)
-            {
-                Vector3 pin = g_amTarget;
-                pin.y += 7.0f; // user: nfs l-"+7 metro" dyal Tele Mark
-                Transform_SetPosition(tf, pin); // glued at +7 m (anti-knockback)
-            }
-            g_markDbg |= 4;
-        }
+        g_am00Act = false;
+        g_am00Wait = 0.f;
+        g_am00RunT = 0.f;
     }
 }
 
@@ -2749,10 +2791,20 @@ static void AikStrikePhase(void *local, void *enemy) {
 // 7 not-a-gun (or weapon baseDamage 0) / 8 out-of-range / 9 SENT /
 // 10 no-pool-or-head / 11 AikInit fail (or strike refused w/o a code) /
 // 12 no-checkParams / 13 no-damage-msg / 14 strike gate (dead/LOS/head) /
-// 15 no-TimeService.  n: 1 = target acquired.
+// 15 no-TimeService / 16 rate-limited (KILL 360 burst cooldown).  n: 1 = target acquired.
 // s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
 void StartAimkill() {
-    if (!Vars.AimKillSend && !Vars.AimKill360) return;
+    if (!Vars.Kill360) return; // KILL 360 (RIOSSM aimkilltestv2) — Send removed
+
+    // RIOSSM aimkilltestv2 rate-limit: pause ba3d l-burst (DELAY 360 = 0 -> fda7la)
+    static int k360Burst = 0;
+    static std::chrono::steady_clock::time_point k360Next = std::chrono::steady_clock::now();
+    if (Vars.K360Delay > 0.0f && std::chrono::steady_clock::now() < k360Next)
+    {
+        aikDbgSt = 16; // 16 = rate-limited (RIOSSM 0x5177D8 cooldown)
+        return;
+    }
+
     aikDbgSt = 1;
     aikDbgN = 0;
     aikDbgC = 0;
@@ -2784,7 +2836,7 @@ void StartAimkill() {
     // fast ("la kano rab3a gadmya: tkhtar aqreb wa7ed w kt9tlo b sor3a").
     Quaternion aik360Orig;
     bool aik360Ghost = false;
-    if (Vars.AimKill360)
+    if (Vars.Kill360)
     {
         Vector3 eHead = GetHeadPosition(enemy);
         Vector3 myPos = CameraMain(local);
@@ -2803,9 +2855,30 @@ void StartAimkill() {
 
     if (aik360Ghost)
         game_sdk->set_aim(local, aik360Orig); // Elite AimRotationGhost_End
+
+    // COUNT 360 / DELAY 360 / SPEED 360 — RIOSSM burst + cooldown mapping
+    if (Vars.K360Delay > 0.0f)
+    {
+        k360Burst++;
+        int cnt = Vars.K360Count;
+        if (cnt < 1) cnt = 1;
+        if (cnt > 10) cnt = 10; // RIOSSM clamps each int to 1..10
+        if (k360Burst >= cnt)
+        {
+            k360Burst = 0;
+            float d = Vars.K360Delay;
+            float sp = Vars.K360Speed;
+            if (sp > 0.01f && sp < 1.0f)
+                d = d / sp; // SPEED 360 0..1: 3li 3li -> pause 9sir
+            if (d > 0.0f)
+                k360Next = std::chrono::steady_clock::now() +
+                           std::chrono::milliseconds((long long)(d * 1000.0f));
+        }
+    }
 }
 
-// ==== Send108 — zexisyy part 2 verbatim (AimKill -> Vars.AimKillSend) =======
+// ==== Send108 — zexisyy part 2 verbatim (kept: AikStrikePhase still calls it;
+// the standalone Send BUTTON + its frame block were REMOVED) =============
 // NOTICE: "Message 108 is separate from Aimkill Send. Same code on iOS and
 // Android... Channel is 2. Cache flag is 0. Weapon id 1 sends unique id 0."
 static void *NewReloadPacket() {
@@ -2821,7 +2894,7 @@ static void *NewReloadPacket() {
 }
 
 static bool Send108(void *local, void *enemy) {
-    if (!Vars.AimKillSend || !local || !enemy) return false;
+    if (!local || !enemy) return false; // Vars.AimKillSend removed (Send feature gone)
     // cover/LOS gates REMOVED (user: "hyd mnha l'cover") — the 108 swap sync
     // goes with every strike, through cover
 

@@ -75,8 +75,10 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_AIMKILL360 = 4, FLTBTN_STOPTIME = 5, FLTBTN_FLYOP = 6, FLTBTN_FLYJUP = 7, FLTBTN_AUTOMARK = 8, FLTBTN_TELEMARK = 9, FLTBTN_DOWNKILL2 = 10, FLTBTN_GHOST = 11, FLTBTN_FLYAUTO = 12, FLTBTN_COUNT = 13 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+// RIOSSM port (user: "THYD 360 W SEND W AUTO MARK" + "TZID AUTO MARK 00 W KILL 360"):
+// Send / 360 / Auto Mark removed -> AUTO MARK 00 + KILL 360 jdod b l3barat RIOSSM.
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_FLYJUP = 5, FLTBTN_TELEMARK = 6, FLTBTN_DOWNKILL2 = 7, FLTBTN_GHOST = 8, FLTBTN_FLYAUTO = 9, FLTBTN_AUTO00 = 10, FLTBTN_KILL360 = 11, FLTBTN_COUNT = 12 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -110,17 +112,16 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // TELEKILL - mauve
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYV2    - 7amra
     ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // RUNN     - mauve
-    ImVec4(0.25f, 1.00f, 0.45f, 1.00f), // AIMKILL  - khadra
-    ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // A360     - cyan (kima l'btn dyalo f l'source)
     ImVec4(1.00f, 0.82f, 0.25f, 1.00f), // STOPTIME - sfer (freeze)
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYOP    - 7amra (fly family, snippet)
     ImVec4(0.75f, 1.00f, 0.20f, 1.00f), // FLYJUP   - chartreuse (jump = energy)
-    ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (CHIBYA)
     ImVec4(0.25f, 0.60f, 1.00f, 1.00f), // TELEMARK - azr9 (teleport)
-    // ---- lounat JDADE (user: "DIRE LWN JDADE B L BOTON") — 4 boutonat jdad ----
     ImVec4(0.13f, 0.88f, 0.80f, 1.00f), // DOWNKILL2- ferrouj (teal)
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
     ImVec4(1.00f, 0.35f, 0.70f, 1.00f), // FLYAUTO  - wardi (pink, fly family — RIOSSM FLYAUTO)
+    // ---- lounat RIOSSM (port jdod: AUTO MARK 00 + KILL 360) ----
+    ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTO MARK 00 - orange (RIOSSM autounderground)
+    ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // KILL 360     - cyan (RIOSSM aimkilltestv2)
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -492,11 +493,8 @@ ImFont* Urbanist;
                 case FLTBTN_RUNN:
                     DrawFloatingButton(i, oxorany("Runn"), &Vars.fly);
                     break;
-                case FLTBTN_AIMKILL:
-                    DrawFloatingButton(i, oxorany("Send"), &Vars.AimKillSend);
-                    break;
-                case FLTBTN_AIMKILL360:
-                    DrawFloatingButton(i, oxorany("360"), &Vars.AimKill360);
+                case FLTBTN_KILL360: // RIOSSM "AIMKILL 360" (label dyalo l-asli)
+                    DrawFloatingButton(i, oxorany("AIMKILL 360"), &Vars.Kill360);
                     break;
                 case FLTBTN_STOPTIME:
                     DrawFloatingButton(i, oxorany("Stop Time"), &Vars.StopTime);
@@ -506,9 +504,6 @@ ImFont* Urbanist;
                     break;
                 case FLTBTN_FLYJUP:
                     DrawFloatingButton(i, oxorany("Fly Jump"), &Vars.FlyJump);
-                    break;
-                case FLTBTN_AUTOMARK:
-                    DrawFloatingButton(i, oxorany("Auto Mark"), &Vars.AutoMark);
                     break;
                 case FLTBTN_TELEMARK:
                     DrawFloatingButton(i, oxorany("Tele Mark"), &Vars.TeleMark);
@@ -521,6 +516,9 @@ ImFont* Urbanist;
                     break;
                 case FLTBTN_FLYAUTO:
                     DrawFloatingButton(i, oxorany("FLYAUTO"), &Vars.FlyAuto); // RIOSSM label
+                    break;
+                case FLTBTN_AUTO00: // RIOSSM "AUTO MARK 00" (label dyalo l-asli)
+                    DrawFloatingButton(i, oxorany("AUTO MARK 00"), &Vars.AutoMark00);
                     break;
                 }
             }
@@ -585,8 +583,10 @@ ImFont* Urbanist;
                         if (ImGui::Checkbox(oxorany("Button Telekill"), &Vars.Telekill)) gFltShow[FLTBTN_TELEKILL] = Vars.Telekill;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
-                        if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
-                        if (ImGui::Checkbox(oxorany("AimKill 360"), &Vars.AimKill360)) gFltShow[FLTBTN_AIMKILL360] = Vars.AimKill360;
+                        if (ImGui::Checkbox(oxorany("Button AIMKILL 360"), &Vars.Kill360)) gFltShow[FLTBTN_KILL360] = Vars.Kill360;
+                        ImGui::SliderFloat(oxorany("SPEED 360"), &Vars.K360Speed, 0.0f, 1.0f, "%.2f"); // RIOSSM: float clamped 0..1
+                        ImGui::SliderInt(oxorany("COUNT 360"), &Vars.K360Count, 1, 10);               // RIOSSM: int clamped 1..10
+                        ImGui::SliderFloat(oxorany("DELAY 360"), &Vars.K360Delay, 0.0f, 3.0f, "%.2f s"); // RIOSSM: rate-limit (0 = bla pause)
                         ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, st11=AikInit, st12-15=strike gates, s>0=packets, c: cover always 0 (removed)
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime; // own option (user: bouhdo)
@@ -601,7 +601,7 @@ ImFont* Urbanist;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
+                            if (ImGui::Checkbox(oxorany("Button AUTO MARK 00"), &Vars.AutoMark00)) gFltShow[FLTBTN_AUTO00] = Vars.AutoMark00;
                         }
                         ImGui::EndTable();
                         // ported round 2 (Elite): DOWN KILL V1/V2 + GHOST
@@ -618,8 +618,15 @@ ImFont* Urbanist;
                         if (ImGui::Checkbox(oxorany("Button FLYAUTO"), &Vars.FlyAuto)) gFltShow[FLTBTN_FLYAUTO] = Vars.FlyAuto;
                         ImGui::SliderFloat(oxorany("SPEED AUTO"), &Vars.FlyAutoSpeed, 0.0f, 0.5f, "%.2f v"); // RIOSSM: 0..0.5, default 0.110
                         ImGui::SliderFloat(oxorany("DELAY AUTO"), &Vars.FlyAutoDelay, 0.0f, 10.0f, "%.1f v"); // RIOSSM: 0..10 s, default 1.8 -> auto-off
+                        ImGui::Spacing();
+                        // ---- AUTO MARK 00 (RIOSSM "autounderground") — labels dyalo ----
+                        ImGui::SliderFloat(oxorany("SPEED 00"), &Vars.Am00Speed, 0.0f, 0.05f, "%.3f"); // RIOSSM: clamp 0..0.05 m/tick
+                        ImGui::SliderFloat(oxorany("DELAY 00"), &Vars.Am00Delay, 0.0f, 10.0f, "%.1f s"); // RIOSSM: delay qbel ma ybda
+                        ImGui::SliderFloat(oxorany("RADIUS 00"), &Vars.Am00Radius, 2.0f, 60.0f, "%.0f m"); // 3douwwa li9rib f had l-mssa7a
+                        ImGui::SliderFloat(oxorany("RUN 00"), &Vars.Am00Run, 0.5f, 15.0f, "%.1f s"); // mdda dyal l-approach qbel ma-yw9ef w y3awd
+                        ImGui::Text("00: st:%d", Vars.Am00Dbg); // st1 = delay / st2 = approach / st3 = 3douwwa b3ida
                         ImGui::TextDisabled("Stop Time = freeze / Down = ta7t l'ard / Ghost = underground");
-                        ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
+                        ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bit 1 tele (Auto Mark removed), ST = m_FixedDeltaTime
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem(("SETTINGS"))) {
@@ -656,12 +663,13 @@ ImFont* Urbanist;
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
                         ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
                         ImGui::TextDisabled("FLY AUTO = SPEED AUTO rise, DELAY AUTO s then auto-off");
+                        ImGui::TextDisabled("AUTO MARK 00 = DELAY -> mchi l-3douwwa li9rib f RADIUS (b SPEED)");
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
-                        ImGui::TextDisabled("AimKill / AimKill 360 / Telekill / Down Kill V2");
-                        ImGui::TextDisabled("360 = t9tel bla manchouf fih (aim wraya)");
-                        ImGui::TextDisabled("+7 m hop: Tele Mark / Auto Mark / Telekill");
+                        ImGui::TextDisabled("AIMKILL 360 / Telekill / Down Kill V2");
+                        ImGui::TextDisabled("AIMKILL 360 = t9tel bla manchouf fih (aim wraya)");
+                        ImGui::TextDisabled("+7 m hop: Tele Mark / Telekill");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
                         if (g_rgState == 1)
@@ -693,19 +701,11 @@ ImFont* Urbanist;
             RunDownKillV2();
             RunGhost();
             RunMarkTP();
+            RunAutoMark00(io.DeltaTime); // AUTO MARK 00 (RIOSSM autounderground): delay -> approach
             RunTelekill();
-            StartAimkill();
+            StartAimkill(); // KILL 360 (RIOSSM aimkilltestv2) — gated internally on Vars.Kill360
             RunResetGuest(); // Reset Guest config (login/lobby — runs always)
-            // zexisyy: msg 108 (reload) — same frame as Aimkill, after local+enemy
-            // (finder gated too: ma ndirouch raycast/finder f l'entry/lobby)
-            if (Vars.AimKillSend)
-            {
-                void *aikM108 = game_sdk->Curent_Match();
-                void *aikL108 = aikM108 ? game_sdk->GetLocalPlayer(aikM108) : nullptr;
-                void *aikE108 = GetClosestEnemyAik(); // instant target (00s)
-                if (aikL108 && aikE108)
-                    Send108(aikL108, aikE108);
-            }
+            // zexisyy msg108 (Send) REMOVED — user: "THYD ... W SEND"
             if (Vars.AimFov > 0) {
                 Vars.isAimFov = true;
             } else {
