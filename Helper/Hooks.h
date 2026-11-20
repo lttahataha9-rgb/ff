@@ -2705,11 +2705,11 @@ static std::vector<void *> GetPlayerList360(void *match) {
     Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((long)match + oxo("0x148"));
     if (!players) return out;
     int sz = players->getSize();
-    void **vals = players->getValues();
-    if (!vals || sz <= 0) return out;
+    if (sz <= 0) return out;
     out.reserve(sz);
     for (int i = 0; i < sz; ++i) {
-        if (vals[i]) out.push_back(vals[i]);
+        void *p = players->getValues()[i];
+        if (p) out.push_back(p);
     }
     return out;
 }
