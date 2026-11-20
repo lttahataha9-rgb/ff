@@ -2621,58 +2621,268 @@ static bool SmartCoverKill(void *enemy)
 // 12 no-checkParams / 13 no-damage-msg / 14 strike gate (dead/LOS/head) /
 // 15 no-TimeService.  n: 1 = target acquired.
 // s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
+// ---- resolved engine functions (cached, resolved once) ----
+struct AimkillApi {
+    void *(*getWeaponOnHand)(void *);
+    int   (*getItemDataID)(void *);
+    void *(*getHeadCollider)(void *);
+    void *(*getGameObject)(void *);
+    float (*getRange)(void *);
+    void *(*getAimingEntity)(void *, void *);
+    void *(*buildCheckParams)(void *, void *, void *, bool, void *);
+    void  (*weaponDoSomething)(void *, void *, uint32_t);
+    void  (*startFiring)(void *, void *);
+    void  (*stopFire)(void *, void *);
+    void *(*currentSimTimer)(void *);
+    void *(*createDamageReq)(void *);
+    COW_GamePlay_IHAAMHPPLMG_o (*getPlayerID)(void *);
+    uint32_t (*playerIDToUint)(COW_GamePlay_IHAAMHPPLMG_o);
+    void *(*packVector3)(Vector3);
+    float (*realtimeSinceStartup)();
+    bool  (*gameFacadeSend)(uint32_t, void *, uint8_t, bool);
+};
+
+static AimkillApi api;
+static bool apiReady = false;
+
+static void InitApi() {
+    if (apiReady) return;
+    api.getWeaponOnHand      = (decltype(api.getWeaponOnHand))      getRealOffset(OFF_Zexis_GetWeaponOnHand);
+    api.getItemDataID        = (decltype(api.getItemDataID))        getRealOffset(OFF_Zexis_GetItemDataID);
+    api.getHeadCollider      = (decltype(api.getHeadCollider))      getRealOffset(OFF_Zexis_GetHeadCollider);
+    api.getGameObject        = (decltype(api.getGameObject))        getRealOffset(OFF_Zexis_GetGameObject);
+    api.getRange             = (decltype(api.getRange))             getRealOffset(OFF_Zexis_Weapon_Range);
+    api.getAimingEntity      = (decltype(api.getAimingEntity))      getRealOffset(OFF_Zexis_GetAimingEntity);
+    api.buildCheckParams     = (decltype(api.buildCheckParams))     getRealOffset(OFF_Zexis_BuildCheckParams);
+    api.weaponDoSomething    = (decltype(api.weaponDoSomething))    getRealOffset(OFF_Zexis_WeaponDoSomething);
+    api.startFiring          = (decltype(api.startFiring))          getRealOffset(OFF_Zexis_StartFiring);
+    api.stopFire             = (decltype(api.stopFire))             getRealOffset(OFF_Zexis_StopFire);
+    api.currentSimTimer      = (decltype(api.currentSimTimer))      getRealOffset(OFF_Zexis_CurrentGameSimulationTimer);
+    api.createDamageReq      = (decltype(api.createDamageReq))      getRealOffset(OFF_Zexis_CreateDamageReq);
+    api.getPlayerID          = (decltype(api.getPlayerID))          getRealOffset(OFF_Zexis_GetPlayerID);
+    api.playerIDToUint       = (decltype(api.playerIDToUint))       getRealOffset(OFF_Zexis_PlayerIDToUint);
+    api.packVector3          = (decltype(api.packVector3))          getRealOffset(OFF_Zexis_PackVector3);
+    api.realtimeSinceStartup = (decltype(api.realtimeSinceStartup)) getRealOffset(OFF_Zexis_RealtimeSinceStartup);
+    api.gameFacadeSend       = (decltype(api.gameFacadeSend))       getRealOffset(OFF_Zexis_GameFacade_Send);
+    apiReady = true;
+}
+
+// ---- 360° config (from V2 loop) ----
+struct AimKill360Cfg {
+    bool  Enable;
+    int   MaxTargets;   // 1..8   (clamped like V2)
+    int   Burst;        // 1..10  (clamped like V2)
+    float FovRatio;     // 0..1   -- 0 or 1 => full 360 (distance-only)
+    float MaxRange;     // default 6000.f
+    float Cooldown;     // seconds; 0 = every frame
+};
+static AimKill360Cfg cfg{true, 8, 3, 1.f, 6000.f, 0.f};
+static float g_nextFireTime = 0.f;
+
+// ---- target filtering (yours + V2 SDK checks) ----
+static bool IsValidTarget(void *local, void *e) {
+    if (!e || e == local) return false;
+    if (!game_sdk->Component_GetTransform(e)) return false;
+    if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(e)) return false;
+    if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(e)) return false;
+    if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(e)) return false;
+    if (game_sdk->GetHp(e) <= 0) return false;
+    if (game_sdk->get_isVisible && !game_sdk->get_isVisible(e)) return false;
+    if (!tanghinh::isVisible(e)) return false;
+    return true;
+}
+
+struct TargetCtx {
+    void *enemy;
+    Vector3 head;
+    Vector3 dir;
+    float dist;
+};
+
+static std::vector<void *> GetPlayerList360(void *match) {
+    std::vector<void *> out;
+    if (!match) return out;
+    Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((long)match + oxo("0x148"));
+    if (!players) return out;
+    int sz = players->getSize();
+    void **vals = players->getValues();
+    if (!vals || sz <= 0) return out;
+    out.reserve(sz);
+    for (int i = 0; i < sz; ++i) {
+        if (vals[i]) out.push_back(vals[i]);
+    }
+    return out;
+}
+
+// ---- send message 106 for one target (your function, unchanged core) ----
+static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
+                           int weaponId, int baseDamage,
+                           void *objectPool,
+                           COW_GamePlay_IHAAMHPPLMG_o localPlayerId,
+                           void *damageInfo, uint32_t uniqueId,
+                           Vector3 localHead) {
+
+    void *headCollider = api.getHeadCollider(t.enemy);
+    if (!headCollider) return;
+    void *hitObject = api.getGameObject(headCollider);
+    if (!hitObject) return;
+
+    if (damageInfo) {
+        *(int   *)((char *)damageInfo + OFF_Zexis_DamageInfo_HitPart)     = 1;
+        *(void **)((char *)damageInfo + OFF_Zexis_DamageInfo_Weapon)      = weapon;
+        *(int   *)((char *)damageInfo + OFF_Zexis_DamageInfo_DamageValue) = baseDamage;
+        *(COW_GamePlay_IHAAMHPPLMG_o *)((char *)damageInfo + OFF_Zexis_DamageInfo_AttackerID) = localPlayerId;
+    }
+
+    // object-pool hit data — the same pool layout the dylib's V2 loop writes
+    char *pool = (char *)objectPool;
+    *(void **)(pool + OFF_Zexis_Pool_HitGameObject) = hitObject;
+    *(void **)(pool + OFF_Zexis_Pool_HitCollider)   = headCollider;
+    void *aimTarget = *(void **)((uint64_t)t.enemy + OFF_Zexis_Player_AimTarget);
+    if (aimTarget) {
+        *(void **)(pool + OFF_Zexis_Pool_HitGameObject) = api.getGameObject(aimTarget);
+        *(void **)(pool + OFF_Zexis_Pool_HitCollider)   = aimTarget;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_HitLocation) = t.head;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir)      = t.dir;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir2)     = t.dir;
+        *(Vector3 *)(pool + OFF_Zexis_Pool_StartPos)    = localHead;
+        *(int   *)(pool + OFF_Zexis_Pool_Damage)        = baseDamage;
+        *(float *)(pool + OFF_Zexis_Pool_Distance)      = t.dist;
+        *(int   *)(pool + OFF_Zexis_Pool_Flags60)       = 1;
+        *(int   *)(pool + OFF_Zexis_Pool_Flags64)       = 1;
+        *(bool  *)(pool + OFF_Zexis_Pool_Flag70)        = true;
+        *(bool  *)(pool + OFF_Zexis_Pool_Flag71)        = true;
+    }
+
+    void *aimingEntity = api.getAimingEntity(local, objectPool);
+    void *checkParams  = api.buildCheckParams(weapon, t.enemy, headCollider, false, nullptr);
+    if (!checkParams) { aikDbgSt = 12; return; }
+
+    uint32_t enemyNetId = api.playerIDToUint(api.getPlayerID(t.enemy));
+    api.weaponDoSomething(weapon, checkParams, enemyNetId);
+
+    uint32_t localNetId = api.playerIDToUint(api.getPlayerID(local));
+    uint32_t weaponField = (weaponId == 1) ? 0u : uniqueId;
+
+    uint32_t simTick = 0;
+    void *simTimer = api.currentSimTimer(nullptr);
+    if (simTimer)
+        simTick = *(uint32_t *)((char *)simTimer + OFF_Zexis_SimTimer_TickCount);
+
+    auto *pkt = (message_C2S_RUDP_TakeDamage_Req_o2 *)api.createDamageReq(local);
+    if (pkt) {
+        pkt->AttackableEntityID = enemyNetId;
+        pkt->RealDamageValue    = 0;
+        pkt->ShieldDamageValue  = 0;
+        pkt->DamageValue        = (uint32_t)game_sdk->GetHp(t.enemy);  // instant kill
+        pkt->DamagerID          = localNetId;
+        pkt->WeaponDataID       = weaponId;
+        pkt->WeaponUniqueID     = weaponField;
+        pkt->HitBodyPart        = 1;                                   // head
+        pkt->TickCount          = simTick;
+        pkt->FirePos            = (message_PVector3IntPos_o *)api.packVector3(localHead);
+        pkt->TargetPos          = (message_PVector3IntPos_o *)api.packVector3(t.head);
+        pkt->CheckParams        = (monoList<float *> *)checkParams;
+        pkt->ArmorRatio         = 1.f;
+        pkt->ExtraFlag          = 0;
+        pkt->BaseTime           = api.realtimeSinceStartup();
+        api.gameFacadeSend(OFF_Zexis_TakeDamageMsgId, pkt, 2, 0);
+        aikDbgSent++;
+        aikDbgSt = 9;
+    }
+    (void)aimingEntity; (void)hitObject;
+}
+
+// ======================= MAIN MERGED METHOD ===============================
 void StartAimkill() {
-    if (!Vars.AimKillSend) return;
+    cfg.Enable = Vars.AimKillSend;
+    if (!cfg.Enable) return;
     aikDbgSt = 1;
     aikDbgN = 0;
     aikDbgC = 0;
 
+    if (!AikInit()) { aikDbgSt = 11; return; }
+    InitApi();
+
     void *match = game_sdk->Curent_Match();
     if (!match) { aikDbgSt = 2; return; }
-
     void *local = game_sdk->GetLocalPlayer(match);
     if (!local || !game_sdk->Component_GetTransform(local)) { aikDbgSt = 2; return; }
     if (game_sdk->get_IsDieing(local) || game_sdk->GetHp(local) <= 0) { aikDbgSt = 3; return; }
 
-    void *enemy = GetClosestEnemyAik(); // instant — bla FOV/angle gates (00s)
-    if (!enemy || enemy == local) { aikDbgSt = 4; return; }
-    if (!game_sdk->Component_GetTransform(enemy)) { aikDbgSt = 5; return; }
-    if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(enemy)) { aikDbgSt = 5; return; }
-    if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(enemy)) { aikDbgSt = 5; return; }
-    if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)) { aikDbgSt = 5; return; }
-    if (game_sdk->GetHp(enemy) <= 0) { aikDbgSt = 5; return; }
-    // cover/LOS gates REMOVED (user: "hyd mnha l'cover ... 0 second") — the
-    // candidate checks above are all that's left (zexisyy had no LOS gate)
-    aikDbgN = 1;
+    // cooldown (V2 behaviour, now driven by RealtimeSinceStartup)
+    float now = api.realtimeSinceStartup();
+    if (cfg.Cooldown > 0.f && now < g_nextFireTime) return;
 
-    // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
-    if (!AikInit()) { aikDbgSt = 11; return; }
-
-    void *weapon = aik.GetWeaponOnHand(local);
-    if (!weapon) { aikDbgSt = 6; return; }
-    if (!AikIsValidGun(weapon)) { aikDbgSt = 7; return; } // Elite IsValidGun gate
-    if (!AikInRange(local, enemy, weapon)) { aikDbgSt = 8; return; } // Elite range gate
-
-    // hit-object scratch = the local player's objectPool (Android _HitObjectInfoWp)
-    void *objectPool = *(void **)((uint64_t)local + OFF_Zexis_Player_ObjectPool);
-    if (!objectPool) { aikDbgSt = 10; return; }
-
+    // ---- 360° target acquisition: distance only, no FOV cone (V2) ----
     Vector3 localHead;
     if (!AikHeadPos(local, &localHead)) { aikDbgSt = 10; return; }
 
-    // Elite AimkillSendStrike ("00" Send): hit-scratch fill -> hit hash ->
-    // CheckParametros -> shuffle-validate -> StartFiring -> msg 106 with
-    // RealDamageValue=HP / DamageValue=baseDamage|(1<<24) / back-area on ->
-    // StopFire. AikStrike sends the packet itself and does aikDbgSent++.
-    int hpBefore = game_sdk->GetHp(enemy);
-    aikDbgSt = 11; // provisional: AikStrike overwrites with the exact gate
-    if (!AikStrike(local, weapon, objectPool, localHead, enemy))
-        return; // aikDbgSt = exact refusal code (12/13/14/15/7) set in AikStrike
-    aikDbgSt = 9; // packet sent
-    // Elite AimkillRefreshAfterKill: SwapWeapon 1/2 + reset after a confirmed kill
-    if (game_sdk->GetHp(enemy) < hpBefore ||
-        (game_sdk->get_IsDieing && game_sdk->get_IsDieing(enemy)))
-        AikRefreshAfterKill(local);
+    std::vector<TargetCtx> targets;
+    for (void *e : GetPlayerList360(match)) {
+        if (!IsValidTarget(local, e)) continue;
+        Vector3 eh;
+        if (!AikHeadPos(e, &eh)) continue;
+        float d = Vector3::Distance(localHead, eh);
+        if (d < 0.0005f || d > cfg.MaxRange) continue;
+        // optional soft FOV gate: 0.f or 1.f == full 360
+        if (cfg.FovRatio > 0.f && cfg.FovRatio < 1.f) {
+            Vector3 v = eh - localHead;
+            float planar = sqrtf(v.x*v.x + v.z*v.z);
+            if (planar > cfg.MaxRange * cfg.FovRatio) continue;
+        }
+        Vector3 dir{0,0,0};
+        if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - localHead;
+                           dir = {v.x*inv, v.y*inv, v.z*inv}; }
+        targets.push_back({e, eh, dir, d});
+    }
+    if (targets.empty()) { aikDbgSt = 4; return; }
+    aikDbgN = (int)targets.size();
+    std::sort(targets.begin(), targets.end(),
+              [](const TargetCtx &a, const TargetCtx &b){ return a.dist < b.dist; });
+    int maxTargets = std::clamp(cfg.MaxTargets, 1, 8);   // V2: top-8 closest
+    if ((int)targets.size() > maxTargets) targets.resize(maxTargets);
+
+    // ---- weapon setup (once) ----
+    void *weapon = api.getWeaponOnHand(local);
+    if (!weapon) { aikDbgSt = 6; return; }
+    *(float *)((uintptr_t)weapon + OFF_Zexis_Weapon_Field5F0) = 0.0f;
+    int weaponId = api.getItemDataID(weapon);
+    int baseDamage = *(int *)((uintptr_t)weapon + OFF_Zexis_Weapon_BaseDamageField);
+    if (weaponId == -1 || baseDamage == 0) { aikDbgSt = 7; return; }
+    if (baseDamage < 100) baseDamage = 999;
+    float range = api.getRange(weapon);
+
+    void *objectPool = *(void **)((uint64_t)local + OFF_Zexis_Player_ObjectPool);
+    if (!objectPool) { aikDbgSt = 10; return; }
+    COW_GamePlay_IHAAMHPPLMG_o localPlayerId =
+        *(COW_GamePlay_IHAAMHPPLMG_o *)((uintptr_t)local + OFF_Zexis_Player_PlayerID);
+
+    void *damageInfo = g_dmg99;
+    if (!damageInfo) {
+        void *attrs = *(void **)((uint64_t)local + OFF_Zexis_Player_Attributes);
+        if (attrs) {
+            void *mod = *(void **)((uint64_t)attrs + OFF_Zexis_Player_DamageModule);
+            if (mod) damageInfo = *(void **)((uint64_t)mod + OFF_Zexis_Player_DamageInfo);
+        }
+    }
+    uint32_t uniqueId = *(uint32_t *)((uintptr_t)weapon + OFF_Zexis_Weapon_UniqueNetID);
+    int shots = std::clamp(cfg.Burst, 1, 10);
+
+    // ---- fire sequence: StartFiring -> message 106 x targets x burst -> StopFire ----
+    api.startFiring(local, weapon);
+    int sent = 0;
+    for (const TargetCtx &t : targets) {
+        if (t.dist > range) { aikDbgSt = 8; continue; }
+        for (int s = 0; s < shots; ++s)
+            SendTakeDamage(local, weapon, t, weaponId, baseDamage,
+                           objectPool, localPlayerId, damageInfo, uniqueId, localHead);
+        ++sent;
+    }
+    api.stopFire(local, weapon);
+
+    if (sent && cfg.Cooldown > 0.f)
+        g_nextFireTime = now + cfg.Cooldown;
 }
 
 // ==== Send108 — zexisyy part 2 verbatim (AimKill -> Vars.AimKillSend) =======
