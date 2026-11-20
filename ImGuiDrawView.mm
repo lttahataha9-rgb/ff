@@ -126,13 +126,16 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
 static float g_panelCol[4] = {0.11f, 0.12f, 0.16f, 0.95f};
-static ImVec4 PanelBright(float k)
+// GLASS variant (user: "tbdl lya chkl l panel" -> glass/rounded): nafs l-tint
+// dyal l-panel walakin b alpha m9ellel bach l-bg yban "semi-transparent"
+// (glass) 3la wara l'game.
+static ImVec4 GlassCol(float k, float a)
 {
     return ImVec4(
         g_panelCol[0] + (1.0f - g_panelCol[0]) * k,
         g_panelCol[1] + (1.0f - g_panelCol[1]) * k,
         g_panelCol[2] + (1.0f - g_panelCol[2]) * k,
-        1.0f);
+        a);
 }
 
 static void DrawFloatingButton(int idx, const char *label, bool *v)
@@ -293,7 +296,7 @@ ImFont* Urbanist;
     Style.WindowPadding = ImVec2(8.0f, 8.0f);
     Style.FramePadding = ImVec2(9.0f, 7.0f);
     Style.ScrollbarRounding = 9.0f;
-            // ===== 4xCRYPTED theme: dark panels + cyan accents =====
+            // ===== base theme: dark panels + cyan accents =====
             ImVec4* colors = ImGui::GetStyle().Colors;
         const ImColor cyan(79, 228, 255);            // #4FE4FF
         const ImColor cyanDim(79, 228, 255, 150);
@@ -526,12 +529,35 @@ ImFont* Urbanist;
     ImGui::SetNextWindowSize(ImVec2(365, 340), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
             {                
-                // design: loun dyal l'panel (SETTINGS) + border/tab tinted
-                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(g_panelCol[0], g_panelCol[1], g_panelCol[2], g_panelCol[3]));
-                ImGui::PushStyleColor(ImGuiCol_Border, PanelBright(0.35f));
-                ImGui::PushStyleColor(ImGuiCol_TabActive, PanelBright(0.18f));
-                ImGui::PushStyleColor(ImGuiCol_TabHovered, PanelBright(0.30f));
-                ImGui::Begin(oxorany("  4xCRYPTED  |  FreeFire 1.132.X"), &MenDeal);
+                // ===== GLASS / ROUNDED panel (user: "tbdl lya chkl l panel") =====
+                // rounded corners + semi-transparent tinted bg (glass) + pill
+                // tabs + rounded frames/sliders.  Loun l-base = g_panelCol
+                // (sala mn SETTINGS) -> l-panel 3ando design jdid w ma fihach
+                // "4xCRYPTED" / "FreeFire" f l-titre.
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 9.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 8.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 10.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 11.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 7.0f));
+                ImGui::PushStyleColor(ImGuiCol_WindowBg, GlassCol(0.00f, 0.84f));      // glass
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, GlassCol(0.06f, 0.42f));       // inner glass
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.00f, 1.00f, 1.00f, 0.18f)); // soft white edge
+                ImGui::PushStyleColor(ImGuiCol_TitleBg, GlassCol(0.04f, 0.90f));
+                ImGui::PushStyleColor(ImGuiCol_TitleBgActive, GlassCol(0.12f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_Tab, GlassCol(0.10f, 0.62f));
+                ImGui::PushStyleColor(ImGuiCol_TabHovered, ImVec4(0.31f, 0.90f, 1.00f, 0.45f));
+                ImGui::PushStyleColor(ImGuiCol_TabActive, ImVec4(0.31f, 0.90f, 1.00f, 0.30f));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(1.00f, 1.00f, 1.00f, 0.10f));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.31f, 0.90f, 1.00f, 0.20f));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.31f, 0.90f, 1.00f, 0.30f));
+                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.31f, 0.90f, 1.00f, 0.24f));
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.31f, 0.90f, 1.00f, 0.34f));
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.31f, 0.90f, 1.00f, 0.44f));
+                ImGui::PushStyleColor(ImGuiCol_PopupBg, GlassCol(0.05f, 0.97f));
+                ImGui::Begin(oxorany("  PANEL  "), &MenDeal);
                 if (ImGui::BeginTabBar(oxorany("Tab"), ImGuiTabBarFlags_FittingPolicyResizeDown)) { // resize-down: kolchi tab yban daiman (ma kat7bet)
                     if (ImGui::BeginTabItem(("ESP"))) {
                     ImGui::Checkbox(oxorany("ESP master"), &Vars.Enable);
@@ -575,7 +601,6 @@ ImFont* Urbanist;
                         if (ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest))
                             gFltShow[FLTBTN_FLYV2] = Vars.Flyingtest; // panel = sataf dyal l'button f écran
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
-                        ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st1=wast zone, st5=scene null, st6=p ma zal Fight (blast wa7d direct, bla snap-back)
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button RUNN"), &Vars.fly)) gFltShow[FLTBTN_RUNN] = Vars.fly;
                         ImGui::SliderFloat(oxorany("Runn?"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
@@ -587,7 +612,6 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("SPEED 360"), &Vars.K360Speed, 0.0f, 1.0f, "%.2f"); // RIOSSM: float clamped 0..1
                         ImGui::SliderInt(oxorany("COUNT 360"), &Vars.K360Count, 1, 10);               // RIOSSM: int clamped 1..10
                         ImGui::SliderFloat(oxorany("DELAY 360"), &Vars.K360Delay, 0.0f, 3.0f, "%.2f s"); // RIOSSM: rate-limit (0 = bla pause)
-                        ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, st11=AikInit, st12-15=strike gates, s>0=packets, c: cover always 0 (removed)
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime; // own option (user: bouhdo)
                         if (ImGui::BeginTable("splitm", 4))
@@ -624,9 +648,7 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("DELAY 00"), &Vars.Am00Delay, 0.0f, 10.0f, "%.1f s"); // RIOSSM: delay qbel ma ybda
                         ImGui::SliderFloat(oxorany("RADIUS 00"), &Vars.Am00Radius, 2.0f, 60.0f, "%.0f m"); // 3douwwa li9rib f had l-mssa7a
                         ImGui::SliderFloat(oxorany("RUN 00"), &Vars.Am00Run, 0.5f, 15.0f, "%.1f s"); // mdda dyal l-approach qbel ma-yw9ef w y3awd
-                        ImGui::Text("00: st:%d", Vars.Am00Dbg); // st1 = delay / st2 = approach / st3 = 3douwwa b3ida
                         ImGui::TextDisabled("Stop Time = freeze / Down = ta7t l'ard / Ghost = underground");
-                        ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bit 1 tele (Auto Mark removed), ST = m_FixedDeltaTime
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem(("SETTINGS"))) {
@@ -656,9 +678,6 @@ ImFont* Urbanist;
                     }
                     if (ImGui::BeginTabItem(("INFO"))) {
                         ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(0.31f, 0.90f, 1.00f, 1.00f), "4xCRYPTED");
-                        ImGui::Text("FreeFire 1.132.X");
-                        ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
                         ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
@@ -684,7 +703,8 @@ ImFont* Urbanist;
                     ImGui::EndTabBar();
                 }
         ImGui::End();
-        ImGui::PopStyleColor(4);
+        ImGui::PopStyleColor(15); // GLASS color stack (see PushStyleColor above)
+        ImGui::PopStyleVar(8);    // GLASS rounding/padding stack
     }
             ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
             get_players();
