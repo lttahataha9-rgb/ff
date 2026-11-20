@@ -347,9 +347,17 @@ public:
 
     static bool isVisible(void *enemy) {
         if (enemy != NULL) {
+            void *cam = game_sdk->get_camera();
+            if (!cam) return false;
+            void *camTF = game_sdk->Component_GetTransform(cam);
+            if (!camTF) return false;
+            void *hc = Player_GetHeadCollider(enemy);
+            if (!hc) return false;
+            void *hcTF = game_sdk->Component_GetTransform(hc);
+            if (!hcTF) return false;
             void *hitObj = NULL;
-            auto Camera = Transform_GetPosition(game_sdk->Component_GetTransform(game_sdk->get_camera()));
-            auto Target = Transform_GetPosition(game_sdk->Component_GetTransform(Player_GetHeadCollider(enemy)));
+            auto Camera = Transform_GetPosition(camTF);
+            auto Target = Transform_GetPosition(hcTF);
             return !Physics_Raycast(Camera, Target, 12, &hitObj);
         }
         return false;
@@ -516,9 +524,9 @@ void *GetClosestEnemyAik()
                 continue;
             if (game_sdk->GetHp(Player) <= 0)
                 continue;
+            if (!game_sdk->get_isVisible(Player) || !tanghinh::isVisible(Player))
+                continue;
             float distance = Vector3::Distance(getPosition(Player), getPosition(LocalPlayer));
-            // cover/LOS gates REMOVED (user: "hyd mnha l'cover" + "0 second"):
-            // closest enemy ANY time, even through cover
             if (distance < shortestVisDistance)
             {
                 shortestVisDistance = distance;
@@ -814,27 +822,6 @@ static void *GetInGameUIScene()
 
 void draw_watermark()
 {
-    // user (correction): "machi MT x CHEAT — LMT x CHEAT, w tkoun f blast
-    // dik [Penny]iOS (top-right, byna f l foto li sft lik), w tla3 mnin
-    // ndkhol l game [mnin dkholt l'app — lobby zada]"
-    std::string claw = oxorany("LMT x CHEAT");
-    ImVec2 text_size = verdana_smol->calc_size(16, claw);
-    ImVec2 text_pos(
-        ImGui::GetIO().DisplaySize.x - text_size.x - 10.0f, // RIGHT (f blast dik RiOS)
-        44.0f); // kif blast "PennyiOS & EreenModz" f l foto
-    AddText(verdana_smol, 16, false, false, text_pos + ImVec2(1, 1), ImColor(0, 0, 0, 150), claw);
-    static float hue = 0.0f;
-    hue += ImGui::GetIO().DeltaTime * 0.1f;
-    if (hue > 1.0f)
-        hue = 0.0f;
-    ImColor rainbow = ImColor::HSV(hue, 0.8f, 0.8f);
-    AddText(verdana_smol, 16, false, false, text_pos, rainbow, claw);
-    ImDrawList *draw_list = ImGui::GetBackgroundDrawList();
-    draw_list->AddLine(
-        ImVec2(text_pos.x, text_pos.y + text_size.y + 2),
-        ImVec2(text_pos.x + text_size.x, text_pos.y + text_size.y + 2),
-        rainbow,
-        2.0f);
 }
 
 // ============================================================
@@ -2635,7 +2622,7 @@ static bool SmartCoverKill(void *enemy)
 // 15 no-TimeService.  n: 1 = target acquired.
 // s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
 void StartAimkill() {
-    if (!Vars.AimKillSend && !Vars.AimKill360) return;
+    if (!Vars.AimKillSend) return;
     aikDbgSt = 1;
     aikDbgN = 0;
     aikDbgC = 0;
@@ -2657,18 +2644,6 @@ void StartAimkill() {
     // cover/LOS gates REMOVED (user: "hyd mnha l'cover ... 0 second") — the
     // candidate checks above are all that's left (zexisyy had no LOS gate)
     aikDbgN = 1;
-
-    // AIMKILL 360 (Elite Aimkill360): "snap aim onto enemy head when target is
-    // behind / off-screen so the shot registers" + "silently rotate the local
-    // player toward the current kill target" — face him the SAME frame we
-    // strike so the server's raycast accepts the hit from ANY direction.
-    if (Vars.AimKill360)
-    {
-        Vector3 eHead = GetHeadPosition(enemy);
-        Vector3 myPos = CameraMain(local);
-        if (eHead != Vector3::zero() && myPos != Vector3::zero())
-            game_sdk->set_aim(local, GetRotationToTheLocation(eHead, 0.1f, myPos));
-    }
 
     // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
     if (!AikInit()) { aikDbgSt = 11; return; }
