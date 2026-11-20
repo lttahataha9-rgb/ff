@@ -38,6 +38,7 @@
 #import "Helper/Monostring.h"
 #include "Helper/font.h"
 #include "Helper/data.h"
+#include "Helper/cicada_icon.h"
 ImFont* verdana_smol;
 ImFont* pixel_big = {};
 ImFont* pixel_smol = {};
@@ -91,13 +92,20 @@ struct FltBtnState {
 static FltBtnState gFltBtn[FLTBTN_COUNT];
 static ImRect gFltBtnRect[FLTBTN_COUNT];   // screen rect while visible (hit-test)
 
+// ===================== floating CICADA menu icon =====================
+static FltBtnState gMenuIconBtn;
+static ImRect gMenuIconRect = ImRect(0, 0, 0, 0);
+static id<MTLTexture> gCicadaIconTex = nil;
+
 static bool MenDeal = true;   // menu visibility (moved up: FFOverlayView needs it)
 
 // Touch hit-testing: while the menu is closed the overlay must give the game
-// every touch EXCEPT taps that land on a floating feature button.
+// every touch EXCEPT taps that land on the CICADA menu icon or a floating feature button.
 static bool FFPointOverFloating(CGPoint p)
 {
     ImVec2 pt((float)p.x, (float)p.y);
+    if (gMenuIconRect.Contains(pt))
+        return true;
     for (int i = 0; i < FLTBTN_COUNT; i++)
         if (gFltBtnRect[i].Contains(pt))
             return true;
@@ -123,14 +131,105 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
-static float g_panelCol[4] = {0.11f, 0.12f, 0.16f, 0.95f};
+static float g_panelCol[4] = {0.06f, 0.06f, 0.09f, 0.96f};
+static float g_accentCol[4] = {0.00f, 0.88f, 0.96f, 1.00f}; // CICADA Neon Cyan accent
 static ImVec4 PanelBright(float k)
 {
     return ImVec4(
-        g_panelCol[0] + (1.0f - g_panelCol[0]) * k,
-        g_panelCol[1] + (1.0f - g_panelCol[1]) * k,
-        g_panelCol[2] + (1.0f - g_panelCol[2]) * k,
+        g_panelCol[0] + (g_accentCol[0] - g_panelCol[0]) * k,
+        g_panelCol[1] + (g_accentCol[1] - g_panelCol[1]) * k,
+        g_panelCol[2] + (g_accentCol[2] - g_panelCol[2]) * k,
         1.0f);
+}
+
+static void DrawMenuIconButton(void)
+{
+    FltBtnState &b = gMenuIconBtn;
+    const float S = 44.0f; // compact small floating icon
+    ImGuiIO &io = ImGui::GetIO();
+    if (!b.inited) {
+        b.inited = true;
+        b.pos = ImVec2(18.0f, 72.0f);
+    }
+    // Clamp inside screen bounds
+    if (io.DisplaySize.x > S && io.DisplaySize.y > S) {
+        if (b.pos.x < 4.0f) b.pos.x = 4.0f;
+        if (b.pos.y < 4.0f) b.pos.y = 4.0f;
+        if (b.pos.x > io.DisplaySize.x - S - 4.0f) b.pos.x = io.DisplaySize.x - S - 4.0f;
+        if (b.pos.y > io.DisplaySize.y - S - 4.0f) b.pos.y = io.DisplaySize.y - S - 4.0f;
+    }
+
+    ImGui::SetNextWindowPos(b.pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(S, S), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S * 0.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+
+    ImGui::Begin("##cicada_icon_win", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                 ImGuiWindowFlags_NoBackground);
+
+    ImGui::SetCursorPos(ImVec2(0, 0));
+    ImGui::InvisibleButton("##cicada_icon_btn", ImVec2(S, S));
+
+    if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (!b.pressed) {
+            b.pressed = true; b.moved = false; b.toggled = false;
+            b.baseline = io.MousePos;
+            b.grabPos = b.pos;
+        } else {
+            float dx = io.MousePos.x - b.baseline.x;
+            float dy = io.MousePos.y - b.baseline.y;
+            if (!b.moved && (fabsf(dx) + fabsf(dy) > 10.0f))
+                b.moved = true;
+            if (b.moved) {
+                b.pos = ImVec2(b.grabPos.x + dx, b.grabPos.y + dy);
+            }
+        }
+    }
+    if (b.pressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        if (!b.moved) {
+            MenDeal = !MenDeal;
+        }
+        b.pressed = false; b.moved = false; b.toggled = false;
+    }
+
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos();
+    ImVec2 center(wp.x + S * 0.5f, wp.y + S * 0.5f);
+    float r = S * 0.5f - 2.0f;
+
+    // Outer ambient glow + dark circular badge
+    ImU32 accCol = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), MenDeal ? 245 : 175);
+    ImU32 glowCol = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), MenDeal ? 75 : 35);
+    dl->AddCircleFilled(center, r + 1.5f, glowCol, 36);
+    dl->AddCircleFilled(center, r, IM_COL32(8, 9, 13, 240), 36);
+
+    // Draw the uploaded CICADA icon texture inside the circular button
+    if (gCicadaIconTex != nil) {
+        float pad = 6.0f;
+        dl->AddImageRounded((ImTextureID)((uintptr_t)gCicadaIconTex),
+                            ImVec2(wp.x + pad, wp.y + pad),
+                            ImVec2(wp.x + S - pad, wp.y + S - pad),
+                            ImVec2(0, 0), ImVec2(1, 1),
+                            IM_COL32(255, 255, 255, 255),
+                            (S - pad * 2.0f) * 0.5f);
+    } else {
+        ImFont *fnt = ImGui::GetFont();
+        ImVec2 ts = fnt->CalcTextSizeA(15.0f, FLT_MAX, 0.0f, "C");
+        dl->AddText(fnt, 15.0f, ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), accCol, "C");
+    }
+
+    // Crisp neon ring border
+    dl->AddCircle(center, r, accCol, 36, MenDeal ? 2.0f : 1.5f);
+
+    gMenuIconRect = ImRect(wp, ImVec2(wp.x + S, wp.y + S));
+
+    ImGui::End();
+    ImGui::PopStyleColor(1);
+    ImGui::PopStyleVar(3);
 }
 
 static void DrawFloatingButton(int idx, const char *label, bool *v)
@@ -286,66 +385,84 @@ ImFont* Urbanist;
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
 
-   ImGui::StyleColorsClassic();
+    ImGui::StyleColorsClassic();
     auto& Style = ImGui::GetStyle();
-    Style.WindowPadding = ImVec2(8.0f, 8.0f);
-    Style.FramePadding = ImVec2(9.0f, 7.0f);
+    Style.WindowPadding = ImVec2(12.0f, 10.0f);
+    Style.FramePadding = ImVec2(9.0f, 6.0f);
     Style.ScrollbarRounding = 9.0f;
-            // ===== 4xCRYPTED theme: dark panels + cyan accents =====
+            // ===== CICADA theme: ultra-sleek obsidian dark panels + neon cyan/violet accents =====
             ImVec4* colors = ImGui::GetStyle().Colors;
-        const ImColor cyan(79, 228, 255);            // #4FE4FF
-        const ImColor cyanDim(79, 228, 255, 150);
-        colors[ImGuiCol_WindowBg] = ImVec4(0.045f, 0.050f, 0.062f, 0.97f);
-        colors[ImGuiCol_PopupBg] = ImVec4(0.055f, 0.060f, 0.075f, 0.99f);
-        colors[ImGuiCol_ChildBg] = ImVec4(0.060f, 0.065f, 0.080f, 1.00f);
-        colors[ImGuiCol_Border] = ImVec4(0.31f, 0.90f, 1.00f, 0.55f);
-        colors[ImGuiCol_FrameBg] = ImVec4(0.110f, 0.120f, 0.150f, 0.85f);
-        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.150f, 0.180f, 0.220f, 0.90f);
-        colors[ImGuiCol_FrameBgActive] = ImVec4(0.180f, 0.230f, 0.280f, 1.00f);
-        colors[ImGuiCol_TitleBg] = ImVec4(0.060f, 0.070f, 0.090f, 1.00f);
-        colors[ImGuiCol_TitleBgActive] = ImVec4(0.075f, 0.090f, 0.115f, 1.00f);
+        const ImColor cyan(0, 224, 245);            // #00E0F5
+        const ImColor cyanDim(0, 224, 245, 150);
+        colors[ImGuiCol_WindowBg] = ImVec4(0.055f, 0.058f, 0.085f, 0.96f);
+        colors[ImGuiCol_PopupBg] = ImVec4(0.065f, 0.070f, 0.100f, 0.99f);
+        colors[ImGuiCol_ChildBg] = ImVec4(0.075f, 0.080f, 0.115f, 0.65f);
+        colors[ImGuiCol_Border] = ImVec4(0.00f, 0.88f, 0.96f, 0.55f);
+        colors[ImGuiCol_FrameBg] = ImVec4(0.110f, 0.120f, 0.165f, 0.88f);
+        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.150f, 0.190f, 0.250f, 0.95f);
+        colors[ImGuiCol_FrameBgActive] = ImVec4(0.180f, 0.250f, 0.320f, 1.00f);
+        colors[ImGuiCol_TitleBg] = ImVec4(0.045f, 0.050f, 0.075f, 1.00f);
+        colors[ImGuiCol_TitleBgActive] = ImVec4(0.060f, 0.070f, 0.105f, 1.00f);
         colors[ImGuiCol_CheckMark] = cyan.Value;
         colors[ImGuiCol_SliderGrab] = cyan.Value;
-        colors[ImGuiCol_SliderGrabActive] = cyan.Value;
-        colors[ImGuiCol_Button] = ImVec4(0.110f, 0.140f, 0.170f, 0.90f);
-        colors[ImGuiCol_ButtonHovered] = ImVec4(0.160f, 0.280f, 0.330f, 1.00f);
-        colors[ImGuiCol_ButtonActive] = ImVec4(0.200f, 0.400f, 0.470f, 1.00f);
-        colors[ImGuiCol_Header] = ImVec4(0.130f, 0.200f, 0.240f, 0.80f);
-        colors[ImGuiCol_HeaderHovered] = ImVec4(0.160f, 0.300f, 0.360f, 0.90f);
-        colors[ImGuiCol_HeaderActive] = ImVec4(0.200f, 0.420f, 0.500f, 1.00f);
-        colors[ImGuiCol_Separator] = ImVec4(0.31f, 0.90f, 1.00f, 0.35f);
-        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.31f, 0.90f, 1.00f, 0.60f);
-        colors[ImGuiCol_SeparatorActive] = ImVec4(0.31f, 0.90f, 1.00f, 0.85f);
+        colors[ImGuiCol_SliderGrabActive] = ImVec4(0.40f, 0.95f, 1.00f, 1.00f);
+        colors[ImGuiCol_Button] = ImVec4(0.110f, 0.145f, 0.195f, 0.92f);
+        colors[ImGuiCol_ButtonHovered] = ImVec4(0.160f, 0.300f, 0.380f, 1.00f);
+        colors[ImGuiCol_ButtonActive] = ImVec4(0.200f, 0.420f, 0.520f, 1.00f);
+        colors[ImGuiCol_Header] = ImVec4(0.130f, 0.210f, 0.270f, 0.85f);
+        colors[ImGuiCol_HeaderHovered] = ImVec4(0.160f, 0.320f, 0.400f, 0.95f);
+        colors[ImGuiCol_HeaderActive] = ImVec4(0.200f, 0.440f, 0.540f, 1.00f);
+        colors[ImGuiCol_Separator] = ImVec4(0.00f, 0.88f, 0.96f, 0.35f);
+        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.00f, 0.88f, 0.96f, 0.65f);
+        colors[ImGuiCol_SeparatorActive] = ImVec4(0.00f, 0.88f, 0.96f, 0.90f);
         colors[ImGuiCol_ResizeGrip] = cyanDim.Value;
         colors[ImGuiCol_ResizeGripHovered] = cyan.Value;
         colors[ImGuiCol_ResizeGripActive] = cyan.Value;
         colors[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
         colors[ImGuiCol_ScrollbarGrab] = cyanDim.Value;
-        colors[ImGuiCol_ScrollbarGrabHovered] = cyanDim.Value;
+        colors[ImGuiCol_ScrollbarGrabHovered] = cyan.Value;
         colors[ImGuiCol_ScrollbarGrabActive] = cyan.Value;
-        colors[ImGuiCol_Tab] = ImVec4(0.090f, 0.100f, 0.125f, 0.90f);
-        colors[ImGuiCol_TabHovered] = ImVec4(0.250f, 0.560f, 0.650f, 0.90f);
-        colors[ImGuiCol_TabActive] = ImVec4(0.140f, 0.300f, 0.360f, 1.00f);
-        colors[ImGuiCol_TabUnfocused] = ImVec4(0.070f, 0.075f, 0.090f, 0.97f);
-        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.110f, 0.150f, 0.180f, 1.00f);
-        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.31f, 0.90f, 1.00f, 0.35f);
+        colors[ImGuiCol_Tab] = ImVec4(0.085f, 0.095f, 0.135f, 0.92f);
+        colors[ImGuiCol_TabHovered] = ImVec4(0.200f, 0.540f, 0.650f, 0.95f);
+        colors[ImGuiCol_TabActive] = ImVec4(0.130f, 0.340f, 0.430f, 1.00f);
+        colors[ImGuiCol_TabUnfocused] = ImVec4(0.070f, 0.075f, 0.105f, 0.97f);
+        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.110f, 0.180f, 0.230f, 1.00f);
+        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.00f, 0.88f, 0.96f, 0.35f);
         colors[ImGuiCol_NavHighlight] = cyan.Value;
-        colors[ImGuiCol_Text] = ImVec4(0.86f, 0.90f, 0.94f, 1.00f);
+        colors[ImGuiCol_Text] = ImVec4(0.92f, 0.95f, 0.98f, 1.00f);
 
-        ImGui::GetStyle().WindowRounding = 12.0f;
-        ImGui::GetStyle().FrameRounding = 7.0f;
+        ImGui::GetStyle().WindowRounding = 14.0f;
+        ImGui::GetStyle().FrameRounding = 8.0f;
         ImGui::GetStyle().ChildRounding = 10.0f;
-        ImGui::GetStyle().GrabRounding = 6.0f;
+        ImGui::GetStyle().GrabRounding = 7.0f;
         ImGui::GetStyle().ScrollbarRounding = 8.0f;
-        ImGui::GetStyle().TabRounding = 6.0f;
+        ImGui::GetStyle().TabRounding = 7.0f;
         ImGui::GetStyle().WindowBorderSize = 1.5f;
-        ImGui::GetStyle().WindowPadding = ImVec2(12.0f, 10.0f);
+        ImGui::GetStyle().WindowPadding = ImVec2(14.0f, 12.0f);
         ImGui::GetStyle().ItemSpacing = ImVec2(10.0f, 8.0f);
+        ImGui::GetStyle().WindowTitleAlign = ImVec2(0.5f, 0.5f);
     ImFont* font = io.Fonts->AddFontFromMemoryTTF(sansbold, sizeof(sansbold), 15.0f, NULL, io.Fonts->GetGlyphRangesCyrillic());
     verdana_smol = io.Fonts->AddFontFromMemoryTTF(verdana, sizeof verdana, 40, NULL, io.Fonts->GetGlyphRangesCyrillic());
     pixel_big = io.Fonts->AddFontFromMemoryTTF((void*)smallestpixel, sizeof smallestpixel, 128, NULL, io.Fonts->GetGlyphRangesCyrillic());
     pixel_smol = io.Fonts->AddFontFromMemoryTTF((void*)smallestpixel, sizeof smallestpixel, 10*2, NULL, io.Fonts->GetGlyphRangesCyrillic());
     ImGui_ImplMetal_Init(_device);
+
+    // Create Metal texture for the uploaded CICADA icon (32x32 RGBA8)
+    if (!gCicadaIconTex && _device) {
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                      width:32
+                                                                                     height:32
+                                                                                  mipmapped:NO];
+        td.usage = MTLTextureUsageShaderRead;
+        td.storageMode = MTLStorageModeShared;
+        gCicadaIconTex = [_device newTextureWithDescriptor:td];
+        if (gCicadaIconTex) {
+            [gCicadaIconTex replaceRegion:MTLRegionMake2D(0, 0, 32, 32)
+                              mipmapLevel:0
+                                withBytes:kCicadaIconRGBA
+                              bytesPerRow:32 * 4];
+        }
+    }
 
     return self;
 }
@@ -466,10 +583,13 @@ ImFont* Urbanist;
             ImGui::NewFrame();
     UIWindow *menuHost = SafeHostWindow();
     CGSize menuSize = (menuHost && menuHost.rootViewController.view) ? menuHost.rootViewController.view.frame.size : UIScreen.mainScreen.bounds.size;
-    CGFloat x = (menuSize.width - 380) / 2;
-    CGFloat y = (menuSize.height - 340) / 2;
+    CGFloat x = (menuSize.width - 410) / 2;
+    CGFloat y = (menuSize.height - 360) / 2;
     disp.width = io.DisplaySize.x;   // was never set -> Arrow ESP bounds were wrong
     disp.height = io.DisplaySize.y;
+            // Always draw the small floating CICADA toggle icon
+            DrawMenuIconButton();
+
             // floating buttons: GHIR li n-active-hom f l'panel (gFltShow —
             // user: "mnin n'active hadi → tla3 lya l'boutonat f l'écran");
             // hidden → rect mrqyad = tap kolchi l l'game
@@ -521,76 +641,141 @@ ImFont* Urbanist;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(365, 340), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(410, 360), ImGuiCond_FirstUseEver);
             if (MenDeal == true)
             {                
-                // design: loun dyal l'panel (SETTINGS) + border/tab tinted
+                // design: loun dyal l'panel (SETTINGS) + border/tab/accent tinted
+                ImVec4 accVec(g_accentCol[0], g_accentCol[1], g_accentCol[2], 1.0f);
                 ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(g_panelCol[0], g_panelCol[1], g_panelCol[2], g_panelCol[3]));
-                ImGui::PushStyleColor(ImGuiCol_Border, PanelBright(0.35f));
-                ImGui::PushStyleColor(ImGuiCol_TabActive, PanelBright(0.18f));
-                ImGui::PushStyleColor(ImGuiCol_TabHovered, PanelBright(0.30f));
-                ImGui::Begin(oxorany("  4xCRYPTED  |  FreeFire 1.132.X"), &MenDeal);
+                ImGui::PushStyleColor(ImGuiCol_Border, PanelBright(0.45f));
+                ImGui::PushStyleColor(ImGuiCol_TabActive, PanelBright(0.28f));
+                ImGui::PushStyleColor(ImGuiCol_TabHovered, PanelBright(0.42f));
+                ImGui::PushStyleColor(ImGuiCol_CheckMark, accVec);
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, accVec);
+                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, accVec);
+
+                ImGui::Begin(oxorany("  CICADA  |  FreeFire 1.132.X  ##cicada_main"), &MenDeal, ImGuiWindowFlags_NoCollapse);
+
+                // Custom CICADA Banner Header with embedded logo + neon accent divider
+                {
+                    ImDrawList *wdl = ImGui::GetWindowDrawList();
+                    ImVec2 p = ImGui::GetCursorScreenPos();
+                    float availW = ImGui::GetContentRegionAvail().x;
+                    float bannerH = 38.0f;
+                    ImU32 accU32 = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 255);
+                    ImU32 accBgL = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 45);
+                    ImU32 accBgR = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 8);
+                    wdl->AddRectFilledMultiColor(p, ImVec2(p.x + availW, p.y + bannerH), accBgL, accBgR, accBgR, accBgL);
+                    wdl->AddRect(p, ImVec2(p.x + availW, p.y + bannerH), IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 90), 8.0f, 0, 1.0f);
+                    wdl->AddRectFilled(p, ImVec2(p.x + 4.0f, p.y + bannerH), accU32, 4.0f);
+
+                    float textX = p.x + 12.0f;
+                    if (gCicadaIconTex != nil) {
+                        wdl->AddImageRounded((ImTextureID)((uintptr_t)gCicadaIconTex),
+                                             ImVec2(p.x + 10.0f, p.y + 5.0f),
+                                             ImVec2(p.x + 38.0f, p.y + 33.0f),
+                                             ImVec2(0, 0), ImVec2(1, 1),
+                                             IM_COL32(255, 255, 255, 255), 6.0f);
+                        textX = p.x + 46.0f;
+                    }
+                    wdl->AddText(ImVec2(textX, p.y + 5.0f), accU32, oxorany("CICADA ENGINE"));
+                    wdl->AddText(ImVec2(textX, p.y + 20.0f), IM_COL32(180, 195, 210, 215), oxorany("VIP EDITION  •  v1.132.X"));
+
+                    // Status pill on the right
+                    const char *badge = oxorany("ONLINE");
+                    ImVec2 bsz = ImGui::CalcTextSize(badge);
+                    ImVec2 bp(p.x + availW - bsz.x - 20.0f, p.y + (bannerH - bsz.y) * 0.5f);
+                    wdl->AddRectFilled(ImVec2(bp.x - 8.0f, bp.y - 3.0f), ImVec2(bp.x + bsz.x + 8.0f, bp.y + bsz.y + 3.0f), IM_COL32(25, 190, 95, 45), 6.0f);
+                    wdl->AddCircleFilled(ImVec2(bp.x - 1.0f, bp.y + bsz.y * 0.5f), 3.0f, IM_COL32(55, 245, 120, 255));
+                    wdl->AddText(ImVec2(bp.x + 4.0f, bp.y), IM_COL32(80, 255, 140, 255), badge);
+
+                    ImGui::Dummy(ImVec2(availW, bannerH + 4.0f));
+                }
+
+                auto DrawSection = [](const char *title) {
+                    ImDrawList *sdl = ImGui::GetWindowDrawList();
+                    ImVec2 sp = ImGui::GetCursorScreenPos();
+                    float sw = ImGui::GetContentRegionAvail().x;
+                    ImU32 acc = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 240);
+                    ImU32 bg = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 28);
+                    sdl->AddRectFilled(sp, ImVec2(sp.x + sw, sp.y + 21.0f), bg, 5.0f);
+                    sdl->AddRectFilled(sp, ImVec2(sp.x + 3.0f, sp.y + 21.0f), acc, 2.0f);
+                    sdl->AddText(ImVec2(sp.x + 10.0f, sp.y + 3.0f), acc, title);
+                    ImGui::Dummy(ImVec2(sw, 23.0f));
+                };
+
                 if (ImGui::BeginTabBar(oxorany("Tab"), ImGuiTabBarFlags_FittingPolicyResizeDown)) { // resize-down: kolchi tab yban daiman (ma kat7bet)
-                    if (ImGui::BeginTabItem(("ESP"))) {
-                    ImGui::Checkbox(oxorany("ESP master"), &Vars.Enable);
-                        if (ImGui::BeginTable("split", 4))
-                    {
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Line ESP"), &Vars.lines);
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Box ESP"), &Vars.Box);
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Health ESP"), &Vars.Health);
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Name ESP"), &Vars.Name);
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Bone ESP"), &Vars.skeleton);
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Distance ESP"), &Vars.Distance);
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Circle ESP"), &Vars.circlepos);
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(oxorany("Outline ESP"), &Vars.Outline);
+                    if (ImGui::BeginTabItem(("  ESP  "))) {
+                        ImGui::Spacing();
+                        DrawSection(oxorany("VISUALS & RADAR"));
+                        ImGui::Checkbox(oxorany("Enable Master ESP"), &Vars.Enable);
+                        ImGui::Separator();
+                        if (ImGui::BeginTable("split", 3))
+                        {
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Line ESP"), &Vars.lines);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Box ESP"), &Vars.Box);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Health ESP"), &Vars.Health);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Name ESP"), &Vars.Name);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Bone ESP"), &Vars.skeleton);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Distance"), &Vars.Distance);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Circle ESP"), &Vars.circlepos);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Outline"), &Vars.Outline);
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(oxorany("Arrow ESP"), &Vars.OOF);
                         }
                         ImGui::EndTable();
-                        ImGui::Checkbox(oxorany("Arrow ESP"), &Vars.OOF);ImGui::SameLine();
-                        ImGui::Checkbox(oxorany("Enemy Count"), &Vars.enemycount);
+                        ImGui::Checkbox(oxorany("Enemy Counter HUD"), &Vars.enemycount);
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem(("AIMBOT"))) {
-                            ImGui::Spacing();
-                            ImGui::Checkbox(oxorany("Aimbot"), &Vars.Aimbot);
-                            ImGui::Combo(oxorany("Trigger"), &Vars.AimWhen, Vars.dir, 4);
-                            ImGui::SliderFloat(oxorany("Radio FOV"), &Vars.AimFov, 0.0f, 500.0f);
-                            ImGui::Checkbox(oxorany("Glow FOV"), &Vars.fovaimglow);
-                            if (Vars.fovaimglow) {
-                                ImGui::ColorEdit4(oxorany("Color FOV"), Vars.fovLineColor);
-                            }
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem(("FEATURES"))) {
+                    if (ImGui::BeginTabItem((" AIMBOT "))) {
                         ImGui::Spacing();
+                        DrawSection(oxorany("AIM ASSISTANCE"));
+                        ImGui::Checkbox(oxorany("Enable Aimbot"), &Vars.Aimbot);
+                        ImGui::Combo(oxorany("Trigger Mode"), &Vars.AimWhen, Vars.dir, 4);
+                        ImGui::SliderFloat(oxorany("FOV Radius"), &Vars.AimFov, 0.0f, 500.0f, "%.0f px");
+                        ImGui::Spacing();
+                        DrawSection(oxorany("FOV CIRCLE STYLE"));
+                        ImGui::Checkbox(oxorany("Glow FOV Circle"), &Vars.fovaimglow);
+                        if (Vars.fovaimglow) {
+                            ImGui::ColorEdit4(oxorany("FOV Color"), Vars.fovLineColor);
+                        }
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem((" FEATURES "))) {
+                        ImGui::Spacing();
+                        DrawSection(oxorany("MOVEMENT & FLIGHT"));
                         if (ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest))
                             gFltShow[FLTBTN_FLYV2] = Vars.Flyingtest; // panel = sataf dyal l'button f écran
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
-                        ImGui::Text("Zone: %d r:%.0f p:%d", flyZSt, flyZR, flyZPhase); // st1=wast zone, st5=scene null, st6=p ma zal Fight (blast wa7d direct, bla snap-back)
+                        ImGui::TextDisabled("Zone: %d  |  r: %.0f  |  phase: %d", flyZSt, flyZR, flyZPhase);
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button RUNN"), &Vars.fly)) gFltShow[FLTBTN_RUNN] = Vars.fly;
-                        ImGui::SliderFloat(oxorany("Runn?"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
+                        ImGui::SliderFloat(oxorany("Run Speed"), &Vars.flySpeed, 0.0f, 100.0f, "%.f");
                         ImGui::Spacing();
+                        DrawSection(oxorany("COMBAT & TELEPORT"));
                         if (ImGui::Checkbox(oxorany("Button Telekill"), &Vars.Telekill)) gFltShow[FLTBTN_TELEKILL] = Vars.Telekill;
-                        ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
+                        ImGui::SliderFloat(oxorany("Telekill Dist"), &Vars.khoangcach, 2.0f, 50.0f, "%.f m");
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("AimKill Send"), &Vars.AimKillSend)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKillSend;
+                        ImGui::SameLine();
                         if (ImGui::Checkbox(oxorany("AimKill 360"), &Vars.AimKill360)) gFltShow[FLTBTN_AIMKILL360] = Vars.AimKill360;
-                        ImGui::Text("Aik: st:%d n:%d s:%d c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC); // st9=sent, st11=AikInit, st12-15=strike gates, s>0=packets, c: cover always 0 (removed)
+                        ImGui::TextDisabled("Aik: st:%d  n:%d  s:%d  c:%d", aikDbgSt, aikDbgN, aikDbgSent, aikDbgC);
                         ImGui::Spacing();
-                        if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime; // own option (user: bouhdo)
-                        if (ImGui::BeginTable("splitm", 4))
+                        DrawSection(oxorany("QUICK FLOATING BUTTONS"));
+                        if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime;
+                        if (ImGui::BeginTable("splitm", 3))
                         {
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Fly Op"), &Vars.FlyOp))
-                                gFltShow[FLTBTN_FLYOP] = Vars.FlyOp; // panel = latch dyal l'button f ecran
+                                gFltShow[FLTBTN_FLYOP] = Vars.FlyOp;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Fly Jump"), &Vars.FlyJump))
                                 gFltShow[FLTBTN_FLYJUP] = Vars.FlyJump;
@@ -598,57 +783,58 @@ ImFont* Urbanist;
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Down V2"), &Vars.DownKillV2)) gFltShow[FLTBTN_DOWNKILL2] = Vars.DownKillV2;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Ghost"), &Vars.Ghost)) gFltShow[FLTBTN_GHOST] = Vars.Ghost;
                         }
                         ImGui::EndTable();
-                        // ported round 2 (Elite): DOWN KILL V1/V2 + GHOST
-                        if (ImGui::BeginTable("splitn", 2))
-                        {
-                            ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Button Down V2"), &Vars.DownKillV2)) gFltShow[FLTBTN_DOWNKILL2] = Vars.DownKillV2;
-                            ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Button Ghost"), &Vars.Ghost)) gFltShow[FLTBTN_GHOST] = Vars.Ghost;
-                        }
-                        ImGui::EndTable();
-                        ImGui::TextDisabled("Stop Time = freeze / Down = ta7t l'ard / Ghost = underground");
-                        ImGui::Text("Mark:%d ST:%.5f", g_markDbg, g_stDeltaShow); // bits 1 tele / 2 auto / 4 pin, ST = m_FixedDeltaTime
+                        ImGui::TextDisabled("Stop Time = freeze | Down = ta7t l'ard | Ghost = underground");
+                        ImGui::TextDisabled("Mark: %d  |  ST: %.5f", g_markDbg, g_stDeltaShow);
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem(("SETTINGS"))) {
+                    if (ImGui::BeginTabItem((" SETTINGS "))) {
                         ImGui::Spacing();
-                        ImGui::Text("Loun dyal l'panel (design):");
-                        ImGui::ColorEdit4("Panel Color", g_panelCol);
-                        ImGui::Text("Presets:");
-                        static const ImVec4 kPresets[5] = {
-                            {0.11f, 0.12f, 0.16f, 0.95f}, // dark navy (default)
-                            {0.85f, 0.92f, 1.00f, 0.95f}, // ice / byd
-                            {0.10f, 0.55f, 0.75f, 0.95f}, // cyan
-                            {0.15f, 0.55f, 0.25f, 0.95f}, // green
-                            {0.65f, 0.15f, 0.20f, 0.95f}, // red
+                        DrawSection(oxorany("CICADA THEME CUSTOMIZER"));
+                        ImGui::ColorEdit4("Panel Background", g_panelCol);
+                        ImGui::ColorEdit4("Accent Neon", g_accentCol);
+                        ImGui::Spacing();
+                        ImGui::Text("Theme Presets:");
+                        struct ThemePreset { const char *name; ImVec4 bg; ImVec4 acc; };
+                        static const ThemePreset kPresets[5] = {
+                            {"Cicada Cyber", {0.06f, 0.06f, 0.09f, 0.96f}, {0.00f, 0.88f, 0.96f, 1.00f}},
+                            {"Amethyst VIP", {0.08f, 0.05f, 0.12f, 0.96f}, {0.75f, 0.32f, 1.00f, 1.00f}},
+                            {"Crimson Blood",{0.10f, 0.05f, 0.06f, 0.96f}, {1.00f, 0.22f, 0.35f, 1.00f}},
+                            {"Emerald Venom",{0.05f, 0.09f, 0.07f, 0.96f}, {0.15f, 0.95f, 0.55f, 1.00f}},
+                            {"Gold Royal",   {0.09f, 0.08f, 0.05f, 0.96f}, {1.00f, 0.78f, 0.18f, 1.00f}},
                         };
                         for (int pi = 0; pi < 5; pi++)
                         {
                             if (pi) ImGui::SameLine();
-                            char pid[16];
+                            char pid[24];
                             snprintf(pid, sizeof(pid), "##pre%d", pi);
-                            if (ImGui::ColorButton(pid, kPresets[pi], ImGuiColorEditFlags_NoBorder, ImVec2(26, 26)))
+                            if (ImGui::ColorButton(pid, kPresets[pi].acc, ImGuiColorEditFlags_NoBorder, ImVec2(30, 26)))
                             {
-                                for (int pc = 0; pc < 4; pc++)
-                                    g_panelCol[pc] = (&kPresets[pi].x)[pc];
+                                for (int pc = 0; pc < 4; pc++) {
+                                    g_panelCol[pc]  = (&kPresets[pi].bg.x)[pc];
+                                    g_accentCol[pc] = (&kPresets[pi].acc.x)[pc];
+                                }
                             }
                         }
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem(("INFO"))) {
+                    if (ImGui::BeginTabItem(("  INFO  "))) {
                         ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(0.31f, 0.90f, 1.00f, 1.00f), "4xCRYPTED");
-                        ImGui::Text("FreeFire 1.132.X");
+                        DrawSection(oxorany("ABOUT CICADA"));
+                        ImGui::TextColored(ImVec4(g_accentCol[0], g_accentCol[1], g_accentCol[2], 1.00f), "CICADA VIP PANEL");
+                        ImGui::Text("Target: FreeFire 1.132.X");
                         ImGui::Spacing();
+                        DrawSection(oxorany("SECURITY & ACCOUNT"));
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
                         ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
-                        ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
+                        ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "HIGH RISK (ki9esso l'players):");
                         ImGui::TextDisabled("AimKill / AimKill 360 / Telekill / Down Kill V2");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
@@ -664,7 +850,7 @@ ImFont* Urbanist;
                     ImGui::EndTabBar();
                 }
         ImGui::End();
-        ImGui::PopStyleColor(4);
+        ImGui::PopStyleColor(7);
     }
             ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
             get_players();

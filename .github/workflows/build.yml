@@ -23,9 +23,12 @@ jobs:
       - name: Build package
         run: make clean package
 
-      - name: Upload .deb
+      - name: Upload .deb and .dylib
         uses: actions/upload-artifact@v4
         with:
           name: ff-deb
-          path: packages/*.deb
+          path: |
+            packages/*.deb
+            .theos/obj/ff.dylib
+            .theos/obj/debug/ff.dylib
           if-no-files-found: error

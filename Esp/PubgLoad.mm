@@ -32,19 +32,16 @@ static UIWindow *SafeHostWindow(void)
 
 + (void)load
 {
-[super load];
- 
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6* NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-             mainWindow = [UIApplication sharedApplication].keyWindow;
-            extraInfo =  [PubgLoad new];
-            [extraInfo initTapGes];
-            [extraInfo tapIconView];
-            [extraInfo initTapGes2];
-            [extraInfo tapIconView2];
-          
-        });
-        
-    }
+    [super load];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        mainWindow = [UIApplication sharedApplication].keyWindow;
+        extraInfo = [PubgLoad new];
+        // Mount the overlay view immediately; the floating CICADA icon inside
+        // ImGuiDrawView toggles the menu on/off with a single tap.
+        [extraInfo tapIconView2];
+    });
+}
 
 -(void)initTapGes
 {
