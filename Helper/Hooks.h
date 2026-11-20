@@ -1,6 +1,7 @@
 #import "vinhtran.hpp"
 #import "loading.hxx"
 #include <fstream>
+#include <map> // DOWN COVER (user snippet): g_playerStates
 #include <chrono> // needed by Telekill +15 m pin (L~1154) — top-level so it's in scope everywhere
 #define FMT_HEADER_ONLY
 #include "fmt/core.h"
@@ -61,7 +62,8 @@ struct Vars_t
     float K360Delay = 0.0f;   // DELAY 360 s — pause ba3d l-burst (RIOSSM rate-limit; 0 = fda7la)
     // (Fly Ultra sliders removed — user: "t7iyed Fix Fly w Fly Ultra")
     // ---- ported from Android EliteXzp round 2 (user: "DOWN KILL + V2, FLY FIX, GHOST") ----
-    bool DownKillV2 = {};  // DOWN KILL V2: smooth -0.4/f descent to -2.5 m, restore off
+    // DOWN KILL V2 REMOVED (user: "thyd Down Kill V2 w zid HADI -> DOWN COVER")
+    bool DownCover = {};   // DOWN COVER (user snippet): sink 0.6 m/f (local 3.2 / enemy 1.8) + flip 180 X
     bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
     bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
 } Vars;
@@ -2100,16 +2102,165 @@ void RunStopTime()
     }
 }
 
-// ---- DOWN KILL V2 (Elite DownKillV2Loop; V1 REMOVED: "thyd Down Kill normal") -
-// V2: nozol b shewwia -0.4 m/f l -2.5 m men groundY l9itah men l'awl, pin;
-// OFF -> 6 frames restore groundY + 0.5 (Elite dkv2ExitHold).
-// GHOST COMBO (user: "twali tkhdem b Ghost w bla m-thbetni"): Ghost hard-sets
-// my position every frame (underground pin) -> while Ghost is ON, V2 writes NO
-// position at all (2 writers katqatelou = stuck / m-thbetek feel) but KEEPS
-// WORKING: it still pulls the enemies down (the kill part). V2 re-arms fresh
-// from the surface after Ghost goes OFF (run=false while ghost owns Y).
+// ---- DOWN COVER (user snippet; REPLACES DOWN KILL V2) ---------------------
+// user: "RADI THYD DIK DOWN KILL V2 W RADI TZID HADI W TSAMIHA DOWN COVER"
+// Snippet dyal l-user (constants + PlayerDownState map + save/restore/flip);
+// l-snippet ma fihach l-tick (ghir l-constants) -> howa li tzad hna:
+//   SavePlayerState -> kol frame nozol b kSinkStep hta l-offset dyalo
+//   (local kLocalSinkOffset 3.2 m / 3douwwa kEnemySinkOffset 1.8 m)
+//   -> GetFlippedRotation (180 deg b4 X) -> OFF: RestoreAllPlayers.
+// GHOST COMBO (nfs l-7dith dyal DOWN KILL V2 l-9dim): Ghost kteb l-position
+//   dyali kol frame -> ma kanqellebch l-local Y (2 writers = stuck) walakin
+//   l-3douwwa zada m3a l-flip khddam. Re-arm fresh mn l-surface mnin Ghost
+//   yweli OFF (nfs l-pattern dyal l-qdim).
+// Rotation: dump-verified iOS 1.132.X (Transform get/set_rotation_Injected
+//   0x8D6CD04 / 0x8D6CD68) + dladdr fail-closed (nfs l-pattern dyal
+//   Transform_SetPosition) -> chet offset -> ghir ma nqelleb walou (l-sink
+//   position kat-khdem rrou7ha).
 // Lobby guard = get_MaxHP <= 0 (nfs l'pattern dyal l'run functions).
-static void DownKillPullEnemies(void *local, Vector3 myPos)
+
+static constexpr float kLocalSinkOffset = 3.2f; // nozol dyali (cover)
+static constexpr float kEnemySinkOffset = 1.8f; // nozol dyal l-3douwwa
+static constexpr float kSinkStep = 0.6f;        // m / frame (snippet)
+
+struct PlayerDownState
+{
+    Vector3 originalPosition;    // Vector3() -> 0,0,0
+    Quaternion originalRotation; // Quaternion() -> 0,0,0,1
+    bool initialized = false;
+};
+
+static std::map<void *, PlayerDownState> g_playerStates;
+static bool g_downCoverActive = false;
+static int g_dcExit = 0; // frames dyal l-restore ba3d ma yte7ti OFF
+
+// --- UnityEngine.Transform rotation (dump.cs iOS 1.132.X) -------------------
+//   get_rotation_Injected 0x8D6CD04 -> void (Transform*, Quaternion* out)
+//   set_rotation_Injected 0x8D6CD68 -> void (Transform*, Quaternion* ref)
+// out/ref pointer ABI = nfs dyal get_position_Injected (0x8D6C250) li khddam
+// f tanghinh -> ma fihach ABI doubt3la HFA return. dladdr fail-closed: lazem
+// y-resolve f nafs l-image dyal Transform::get_position (0x8D6C1EC).
+static void *g_dcGetRot = nullptr;
+static void *g_dcSetRot = nullptr;
+static bool g_dcRotTried = false;
+static void *DCTransformFn(const char *offHex)
+{
+    uintptr_t off = strtoull(offHex, NULL, 0);
+    if (!off)
+        return nullptr;
+    void *cand = (void *)getRealOffset(off);
+    Dl_info goodInfo{};
+    Dl_info candInfo{};
+    if (cand &&
+        dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+        dladdr(cand, &candInfo) &&
+        goodInfo.dli_fbase && candInfo.dli_fbase &&
+        goodInfo.dli_fbase == candInfo.dli_fbase)
+        return cand;
+    return nullptr;
+}
+static void DCRotationInit()
+{
+    if (g_dcRotTried)
+        return;
+    g_dcRotTried = true;
+    g_dcGetRot = DCTransformFn("0x8D6CD04");
+    g_dcSetRot = DCTransformFn("0x8D6CD68");
+}
+static bool DCRotationOk()
+{
+    DCRotationInit();
+    return g_dcGetRot && g_dcSetRot;
+}
+static Quaternion Transform_GetRotation(void *tf)
+{
+    Quaternion q;
+    DCRotationInit();
+    if (g_dcGetRot && tf)
+        ((void (*)(void *, Quaternion *))g_dcGetRot)(tf, &q);
+    return q;
+}
+static void Transform_SetRotation(void *tf, Quaternion q)
+{
+    DCRotationInit();
+    if (!g_dcSetRot || !tf)
+        return;
+    ((void (*)(void *, Quaternion *))g_dcSetRot)(tf, &q);
+}
+
+// --- snippet helpers (user code, ported) ------------------------------------
+// "Flip rotation by 180 degrees around X axis" (dyal l-user) - b nafs
+// l-convention dyal Quaternion.h: ToEuler kayrje3 degrees + 180 w FromEuler
+// kay-ne77i 180 (round-trip exact) -> +180 f l-pitch = flip 180 deg b4 X
+// (relative kif l-comment dyalo, ma chi pitch cst).
+static Quaternion GetFlippedRotation(Quaternion original)
+{
+    Vector3 euler = Quaternion::ToEuler(original);
+    return Quaternion::FromEuler(euler.x + 180.0f, euler.y, euler.z);
+}
+
+static void SavePlayerState(void *player)
+{
+    if (!player)
+        return;
+    void *tf = game_sdk->Component_GetTransform(player);
+    if (!tf)
+        return;
+    if (g_playerStates.count(player))
+        return; // mra wa7da qbel ma ybda (original = l-position l-asliya)
+    PlayerDownState st;
+    st.originalPosition = game_sdk->get_position(tf);
+    st.originalRotation = Transform_GetRotation(tf);
+    st.initialized = true;
+    g_playerStates.emplace(player, st);
+}
+
+static void ApplyPlayerFlip(void *player)
+{
+    auto it = g_playerStates.find(player);
+    if (it == g_playerStates.end() || !it->second.initialized)
+        return;
+    if (!DCRotationOk())
+        return;
+    void *tf = game_sdk->Component_GetTransform(player);
+    if (!tf)
+        return;
+    Transform_SetRotation(tf, GetFlippedRotation(it->second.originalRotation));
+}
+
+// OFF -> n-3awed l-Y l-asli (hir Y - ma kan-teleportich f X/Z) + l-rotation.
+// skipLocalPos = Ghost kteb l-position dyali -> ma nqelleb (2 writers = stuck)
+static void RestorePlayerState(void *player, void *local, bool skipLocalPos)
+{
+    if (!player)
+        return;
+    auto it = g_playerStates.find(player);
+    if (it == g_playerStates.end() || !it->second.initialized)
+        return;
+    void *tf = game_sdk->Component_GetTransform(player);
+    if (!tf)
+        return;
+    if (!(skipLocalPos && player == local))
+    {
+        Vector3 p = game_sdk->get_position(tf);
+        if (p != Vector3::zero())
+        {
+            p.y = it->second.originalPosition.y + 0.5f; // n-nizlo 3la surface (kif dkv2ExitHold)
+            Transform_SetPosition(tf, p);
+        }
+    }
+    if (DCRotationOk())
+        Transform_SetRotation(tf, it->second.originalRotation);
+}
+
+static void RestoreAllPlayers(void *local, bool skipLocalPos)
+{
+    for (auto &pair : g_playerStates)
+        RestorePlayerState(pair.first, local, skipLocalPos);
+}
+
+// l-tick (ma kanch f l-snippet): save -> sink b kSinkStep -> flip.
+static void DownCoverTick(void *local, Vector3 myPos, bool ghostOwns)
 {
     void *m = game_sdk->Curent_Match();
     if (!m)
@@ -2121,103 +2272,102 @@ static void DownKillPullEnemies(void *local, Vector3 myPos)
     for (int u = 0; u < players->getSize(); u++)
     {
         void *e = players->getValues()[u];
-        if (!e || e == local)
+        if (!e)
             continue;
-        if (game_sdk->get_MaxHP(e) <= 0 || game_sdk->get_IsDieing(e))
+        bool isLocal = (e == local);
+        if (!isLocal)
+        {
+            if (game_sdk->get_MaxHP(e) <= 0 || game_sdk->get_IsDieing(e))
+                continue;
+            if (game_sdk->get_isLocalTeam(e))
+                continue;
+        }
+        void *tf = game_sdk->Component_GetTransform(e);
+        if (!tf)
             continue;
-        if (game_sdk->get_isLocalTeam(e))
+        Vector3 p = game_sdk->get_position(tf);
+        if (p == Vector3::zero())
             continue;
-        void *etf = game_sdk->Component_GetTransform(e);
-        if (!etf)
+        if (!isLocal && Vector3::Distance(p, myPos) > 200.0f)
             continue;
-        Vector3 ep = game_sdk->get_position(etf);
-        if (ep == Vector3::zero())
+
+        if (isLocal && ghostOwns)
+        {
+            // Ghost kteb l-position dyali kol frame -> ma kanzidch write (2
+            // writers = stuck / m-thbetek). N-mchiw l-local men l-map bach
+            // y3awd y-tsejjel fresh mn l-surface mnin Ghost yweli OFF.
+            g_playerStates.erase(e);
             continue;
-        if (Vector3::Distance(ep, myPos) > 200.0f)
+        }
+
+        SavePlayerState(e); // mra wa7da (original = l-position l-asliya)
+        auto it = g_playerStates.find(e);
+        if (it == g_playerStates.end() || !it->second.initialized)
             continue;
-        ep.y -= 1.8f;
-        Transform_SetPosition(etf, ep);
+
+        // ---- sink (l-tick li ma kanch f l-snippet) ----
+        float off = isLocal ? kLocalSinkOffset : kEnemySinkOffset;
+        float targetY = it->second.originalPosition.y - off;
+        if (p.y > targetY)
+        {
+            p.y -= kSinkStep;
+            if (p.y < targetY)
+                p.y = targetY;
+            Transform_SetPosition(tf, p);
+        }
+
+        // ---- flip 180 deg b4 X (GetFlippedRotation dyal l-user) ----
+        ApplyPlayerFlip(e);
     }
 }
 
-static bool g_dkv2Run = false;
-static float g_dkv2GroundY = 0.0f;
-static float g_dkv2CurY = 0.0f;
-static int g_dkv2Exit = 0;
-void RunDownKillV2()
+void RunDownCover()
 {
-    // GHOST COMBO (user: "twali tkhdem b Ghost w bla m-thbetni"): see header above.
-    bool ghostOwns = Vars.Ghost;
-    if (!Vars.DownKillV2)
+    void *m = game_sdk->Curent_Match();
+    void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
+    bool live = (local && game_sdk->get_MaxHP(local) > 0);
+
+    // ---- OFF / lobby / met -> n-3awed (6 frames hold, kif dkv2ExitHold) ----
+    if (!Vars.DownCover || !live)
     {
-        if (g_dkv2Run)
+        if (g_downCoverActive)
         {
-            g_dkv2Run = false;
-            g_dkv2Exit = 6;
+            g_downCoverActive = false;
+            g_dcExit = 6;
         }
-        if (g_dkv2Exit > 0)
+        if (g_dcExit > 0)
         {
-            g_dkv2Exit--;
-            if (ghostOwns)
-                return; // Ghost owns Y: NO restore write (no fight = no stuck)
-            void *m = game_sdk->Curent_Match();
-            void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
-            void *tf = (local && game_sdk->get_MaxHP(local) > 0)
-                           ? game_sdk->Component_GetTransform(local)
-                           : nullptr;
-            if (tf)
+            if (!live)
             {
-                Vector3 p = game_sdk->get_position(tf);
-                if (p != Vector3::zero())
-                {
-                    p.y = g_dkv2GroundY + 0.5f;
-                    Transform_SetPosition(tf, p);
-                }
+                g_dcExit = 0; // lobby/met: ma n-qelleb-walou (guard)
+            }
+            else
+            {
+                g_dcExit--;
+                RestoreAllPlayers(local, Vars.Ghost);
+                if (g_dcExit == 0)
+                    g_playerStates.clear();
+                return;
             }
         }
+        g_playerStates.clear();
         return;
     }
-    void *m = game_sdk->Curent_Match();
-    if (!m)
+
+    void *ltf = game_sdk->Component_GetTransform(local);
+    if (!ltf)
         return;
-    void *local = game_sdk->GetLocalPlayer(m);
-    if (!local || game_sdk->get_MaxHP(local) <= 0)
+    Vector3 myPos = game_sdk->get_position(ltf);
+    if (myPos == Vector3::zero())
+        return;
+
+    if (!g_downCoverActive)
     {
-        g_dkv2Run = false;
-        return;
+        g_downCoverActive = true;
+        g_playerStates.clear(); // fresh arm (nfs l-"re-arm fresh" dyal Ghost combo)
+        g_dcExit = 0;
     }
-    void *tf = game_sdk->Component_GetTransform(local);
-    if (!tf)
-        return;
-    Vector3 p = game_sdk->get_position(tf);
-    if (p == Vector3::zero())
-        return;
-    if (ghostOwns)
-    {
-        // Ghost hard-sets my position every frame (underground pin) — V2 must
-        // NOT add its own write on top (2 writers = double-pin / "m-thbetek").
-        // V2 still WORKS m3a Ghost: it keeps pulling enemies down (kill part).
-        // Re-arm fresh from the surface after Ghost goes OFF.
-        g_dkv2Run = false;
-        DownKillPullEnemies(local, p);
-        return;
-    }
-    if (!g_dkv2Run)
-    {
-        g_dkv2Run = true;
-        g_dkv2GroundY = p.y;
-        g_dkv2CurY = p.y;
-    }
-    float targetY = g_dkv2GroundY - 2.5f;
-    if (g_dkv2CurY > targetY)
-    {
-        g_dkv2CurY -= 0.40f;
-        if (g_dkv2CurY < targetY)
-            g_dkv2CurY = targetY;
-    }
-    p.y = g_dkv2CurY;
-    Transform_SetPosition(tf, p);
-    DownKillPullEnemies(local, p);
+    DownCoverTick(local, myPos, Vars.Ghost);
 }
 
 // ---- FIX FLY + Fly Ultra REMOVED (user: "t7iyed Fix Fly w Fly Ultra") --------
