@@ -2305,39 +2305,119 @@ static Vector3 MarkedLoc()
 // delete anything ourselves (fail-closed). m_LocalConfig is re-read from
 // statics EVERY frame (if the config object is re-parsed we follow the new
 // one, never a stale pointer). Missing il2cpp exports -> status -1 (INFO tab).
-static void *g_rgKlass = nullptr;
-static void *(*g_rgStatics)(void *) = nullptr;
-static int g_rgState = 0; // 0 = retry, 1 = OK, -1 = il2cpp API missing
+static void **g_rgTypeInfoSlot = nullptr;
+static uint32_t g_rgStaticsOff = 0xB8;
+static int g_rgState = 0; // 0 = retry, 1 = OK, -1 = failed
+static bool g_rgLastToggle = false;
+
+static void ExecuteDirectGuestReset()
+{
+    // Direct Garena MSDK iOS guest reset RVAs from dump.cs:
+    // GarenaMSDKMgr.get_Instance = 0x6D076E8
+    // GarenaMSDKMgr.ResetGuest   = 0x6D098F0
+    // GarenaMSDK_ResetGuest      = 0x6D14780
+    auto getMsdkInst = (void *(*)())getRealOffset(oxo("0x6D076E8"));
+    auto msdkResetGuest = (void (*)(void *))getRealOffset(oxo("0x6D098F0"));
+    auto rawResetGuest = (void (*)())getRealOffset(oxo("0x6D14780"));
+    if (getMsdkInst && msdkResetGuest) {
+        void *inst = getMsdkInst();
+        if (inst && (uintptr_t)inst > 0x100000000ULL && ((uintptr_t)inst >> 48) == 0) {
+            msdkResetGuest(inst);
+        } else if (rawResetGuest) {
+            rawResetGuest();
+        }
+    } else if (rawResetGuest) {
+        rawResetGuest();
+    }
+}
+
 void RunResetGuest()
 {
+    // COW.GameConfig.get_ResetGuest() = 0x507F3A0 (dump.cs L1098448)
+    auto fnGetResetGuest = (bool (*)())getRealOffset(oxo("0x507F3A0"));
+    if (!fnGetResetGuest) {
+        g_rgState = -1;
+        return;
+    }
+
     if (g_rgState == 0)
     {
-        if (!g_rgStatics)
-        {
-            g_rgStatics = (void *(*)(void *))UnitySym("il2cpp_class_get_static_fields");
-            if (!g_rgStatics)
-            {
-                g_rgState = -1; // il2cpp exports not available -> fail-closed
-                return;
+        Dl_info info{};
+        if (!dladdr((void *)fnGetResetGuest, &info) || !info.dli_fbase) {
+            g_rgState = -1;
+            return;
+        }
+        // Call the game's own getter once so IL2CPP runs .cctor / class init on GameConfig
+        fnGetResetGuest();
+
+        // Decode ADRP + LDR in get_ResetGuest (0x507F3A0) to locate GameConfig_TypeInfo without dlsym
+        const uint32_t *code = (const uint32_t *)fnGetResetGuest;
+        uintptr_t adrpPages[32] = {0};
+        void **foundSlot = nullptr;
+        uint32_t foundStaticsOff = 0xB8;
+
+        for (int i = 0; i < 48; ++i) {
+            uint32_t insn = code[i];
+            if ((insn & 0x9F000000) == 0x90000000) {
+                uint32_t rd = insn & 0x1F;
+                int64_t immlo = (insn >> 29) & 0x3;
+                int64_t immhi = (insn >> 5) & 0x7FFFF;
+                int64_t imm = (immhi << 2) | immlo;
+                if (imm & (1LL << 20)) imm -= (1LL << 21);
+                uintptr_t pc = (uintptr_t)(&code[i]);
+                adrpPages[rd] = (pc & ~0xFFFULL) + (uintptr_t)(imm << 12);
+            } else if ((insn & 0xFFC00000) == 0xF9400000) {
+                uint32_t rn = (insn >> 5) & 0x1F;
+                uint32_t off = ((insn >> 10) & 0xFFF) * 8;
+                if (!foundSlot && adrpPages[rn] != 0) {
+                    uintptr_t candAddr = adrpPages[rn] + off;
+                    void *candKlass = *(void **)candAddr;
+                    if (candKlass && (uintptr_t)candKlass > 0x100000000ULL && ((uintptr_t)candKlass >> 48) == 0) {
+                        foundSlot = (void **)candAddr;
+                    }
+                    adrpPages[rn] = 0;
+                } else if (off == 0x130 && i > 0) {
+                    for (int j = i - 1; j >= 0 && j >= i - 6; --j) {
+                        uint32_t prev = code[j];
+                        if ((prev & 0xFFC00000) == 0xF9400000 && (prev & 0x1F) == rn) {
+                            uint32_t stOff = ((prev >> 10) & 0xFFF) * 8;
+                            if (stOff >= 0x80 && stOff <= 0x120)
+                                foundStaticsOff = stOff;
+                            break;
+                        }
+                    }
+                }
             }
         }
-        g_rgKlass = FindGameClass("COW", "GameConfig");
-        if (!g_rgKlass)
-            return; // domain not ready yet -> retry next frame
-        g_rgState = 1;
+
+        if (foundSlot) {
+            g_rgTypeInfoSlot = foundSlot;
+            g_rgStaticsOff = foundStaticsOff;
+            g_rgState = 1;
+        }
     }
-    if (g_rgState != 1 || !g_rgKlass || !g_rgStatics)
-        return;
-    void *st = g_rgStatics(g_rgKlass);
-    void *lc = (st && (uintptr_t)st > 0x10000)
-                   ? *(void **)((uintptr_t)st + oxo("0x130"))
-                   : nullptr; // GameConfig.m_LocalConfig (statics +0x130)
-    if (!lc || (uintptr_t)lc < 0x10000)
-        return; // config not loaded yet -> retry
-    bool *f = (bool *)((uintptr_t)lc + oxo("0xD6")); // LocalConfig.resetGuest
-    bool want = Vars.ResetGuest;
-    if (*f != want)
-        *f = want; // re-assert (the game may re-parse config over us)
+
+    if (Vars.ResetGuest && !g_rgLastToggle) {
+        ExecuteDirectGuestReset();
+    }
+    g_rgLastToggle = Vars.ResetGuest;
+
+    if (g_rgState == 1 && g_rgTypeInfoSlot) {
+        void *klass = *g_rgTypeInfoSlot;
+        if (!klass || (uintptr_t)klass < 0x100000000ULL || ((uintptr_t)klass >> 48) != 0)
+            return;
+        void *st = *(void **)((uintptr_t)klass + g_rgStaticsOff);
+        if (!st || (uintptr_t)st < 0x100000000ULL || ((uintptr_t)st >> 48) != 0)
+            return;
+        void *lc = *(void **)((uintptr_t)st + oxo("0x130")); // GameConfig.m_LocalConfig (statics +0x130)
+        if (!lc || (uintptr_t)lc < 0x100000000ULL || ((uintptr_t)lc >> 48) != 0)
+            return;
+        bool want = Vars.ResetGuest;
+        bool *f1 = (bool *)((uintptr_t)lc + oxo("0xD6")); // LocalConfig.resetGuest
+        bool *f2 = (bool *)((uintptr_t)lc + oxo("0xD7")); // LocalConfig.resetGuestBeforeLogin
+        if (*f1 != want) *f1 = want;
+        if (*f2 != want) *f2 = want;
+    }
 }
 
 // ---- forceGlideTP — REMOVED (crash fix, user: "mnin fixiti teleport la 7m

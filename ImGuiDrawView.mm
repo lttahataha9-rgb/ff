@@ -141,6 +141,214 @@ static ImVec4 PanelBright(float k)
         1.0f);
 }
 
+// ===================== AUTO SAVE SYSTEM (NSUserDefaults) =====================
+static bool g_autoSave = true;
+
+struct CicadaSaveData {
+    uint32_t magic;
+    bool autoSave;
+    // ESP
+    bool espEnable, lines, box, outline, name, health, distance, circlepos, skeleton, oof, enemycount;
+    // Aimbot
+    bool aimbot, fovaimglow;
+    int aimWhen;
+    float aimFov;
+    float fovLineColor[4];
+    // Features & Floating Buttons
+    bool fltShow[FLTBTN_COUNT];
+    bool telekill, aimKillSend, fly, flyingtest, flyOp, flyJump, stopTime, teleMark, autoMark, downKillV2, ghost, resetGuest;
+    float flySpeed, flyhei, khoangcach;
+    // Theme
+    float panelCol[4];
+    float accentCol[4];
+    // Floating icon + button positions
+    float menuIconPos[2];
+    bool menuIconInited;
+    float fltPos[FLTBTN_COUNT][2];
+    bool fltInited[FLTBTN_COUNT];
+};
+
+static CicadaSaveData g_lastSavedSnap = {};
+static bool g_saveSnapInited = false;
+static NSString *const kCicadaSaveKey = @"CicadaAutoSave_v2";
+static NSString *const kCicadaAutoSaveFlagKey = @"CicadaAutoSaveEnabled_v2";
+
+static void CaptureSaveSnapshot(CicadaSaveData *d)
+{
+    memset(d, 0, sizeof(CicadaSaveData));
+    d->magic = 0xC1CADA02;
+    d->autoSave = g_autoSave;
+    d->espEnable = Vars.Enable;
+    d->lines = Vars.lines;
+    d->box = Vars.Box;
+    d->outline = Vars.Outline;
+    d->name = Vars.Name;
+    d->health = Vars.Health;
+    d->distance = Vars.Distance;
+    d->circlepos = Vars.circlepos;
+    d->skeleton = Vars.skeleton;
+    d->oof = Vars.OOF;
+    d->enemycount = Vars.enemycount;
+
+    d->aimbot = Vars.Aimbot;
+    d->fovaimglow = Vars.fovaimglow;
+    d->aimWhen = Vars.AimWhen;
+    d->aimFov = Vars.AimFov;
+    for (int i = 0; i < 4; ++i) d->fovLineColor[i] = Vars.fovLineColor[i];
+
+    for (int i = 0; i < FLTBTN_COUNT; ++i) {
+        d->fltShow[i] = gFltShow[i];
+        d->fltPos[i][0] = gFltBtn[i].pos.x;
+        d->fltPos[i][1] = gFltBtn[i].pos.y;
+        d->fltInited[i] = gFltBtn[i].inited;
+    }
+    d->telekill = Vars.Telekill;
+    d->aimKillSend = Vars.AimKillSend;
+    d->fly = Vars.fly;
+    d->flyingtest = Vars.Flyingtest;
+    d->flyOp = Vars.FlyOp;
+    d->flyJump = Vars.FlyJump;
+    d->stopTime = Vars.StopTime;
+    d->teleMark = Vars.TeleMark;
+    d->autoMark = Vars.AutoMark;
+    d->downKillV2 = Vars.DownKillV2;
+    d->ghost = Vars.Ghost;
+    d->resetGuest = Vars.ResetGuest;
+    d->flySpeed = Vars.flySpeed;
+    d->flyhei = Vars.flyhei;
+    d->khoangcach = Vars.khoangcach;
+
+    for (int i = 0; i < 4; ++i) {
+        d->panelCol[i] = g_panelCol[i];
+        d->accentCol[i] = g_accentCol[i];
+    }
+    d->menuIconPos[0] = gMenuIconBtn.pos.x;
+    d->menuIconPos[1] = gMenuIconBtn.pos.y;
+    d->menuIconInited = gMenuIconBtn.inited;
+}
+
+static void SaveAutoSaveConfigNow(void)
+{
+    CicadaSaveData cur;
+    CaptureSaveSnapshot(&cur);
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setBool:g_autoSave forKey:kCicadaAutoSaveFlagKey];
+    if (g_autoSave) {
+        NSData *blob = [NSData dataWithBytes:&cur length:sizeof(CicadaSaveData)];
+        [ud setObject:blob forKey:kCicadaSaveKey];
+    }
+    [ud synchronize];
+    g_lastSavedSnap = cur;
+    g_saveSnapInited = true;
+}
+
+static void LoadAutoSaveConfig(void)
+{
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if ([ud objectForKey:kCicadaAutoSaveFlagKey] != nil) {
+        g_autoSave = [ud boolForKey:kCicadaAutoSaveFlagKey];
+    }
+    if (!g_autoSave) {
+        CaptureSaveSnapshot(&g_lastSavedSnap);
+        g_saveSnapInited = true;
+        return;
+    }
+    NSData *blob = [ud dataForKey:kCicadaSaveKey];
+    if (!blob || [blob length] != sizeof(CicadaSaveData)) {
+        CaptureSaveSnapshot(&g_lastSavedSnap);
+        g_saveSnapInited = true;
+        return;
+    }
+    const CicadaSaveData *d = (const CicadaSaveData *)[blob bytes];
+    if (d->magic != 0xC1CADA02) {
+        CaptureSaveSnapshot(&g_lastSavedSnap);
+        g_saveSnapInited = true;
+        return;
+    }
+    Vars.Enable = d->espEnable;
+    Vars.lines = d->lines;
+    Vars.Box = d->box;
+    Vars.Outline = d->outline;
+    Vars.Name = d->name;
+    Vars.Health = d->health;
+    Vars.Distance = d->distance;
+    Vars.circlepos = d->circlepos;
+    Vars.skeleton = d->skeleton;
+    Vars.OOF = d->oof;
+    Vars.enemycount = d->enemycount;
+
+    Vars.Aimbot = d->aimbot;
+    Vars.fovaimglow = d->fovaimglow;
+    Vars.AimWhen = d->aimWhen;
+    Vars.AimFov = d->aimFov;
+    for (int i = 0; i < 4; ++i) Vars.fovLineColor[i] = d->fovLineColor[i];
+
+    for (int i = 0; i < FLTBTN_COUNT; ++i) {
+        gFltShow[i] = d->fltShow[i];
+        if (d->fltInited[i]) {
+            gFltBtn[i].pos = ImVec2(d->fltPos[i][0], d->fltPos[i][1]);
+            gFltBtn[i].inited = true;
+        }
+    }
+    Vars.Telekill = d->telekill;
+    Vars.AimKillSend = d->aimKillSend;
+    Vars.fly = d->fly;
+    Vars.Flyingtest = d->flyingtest;
+    Vars.FlyOp = d->flyOp;
+    Vars.FlyJump = d->flyJump;
+    Vars.StopTime = d->stopTime;
+    Vars.TeleMark = d->teleMark;
+    Vars.AutoMark = d->autoMark;
+    Vars.DownKillV2 = d->downKillV2;
+    Vars.Ghost = d->ghost;
+    Vars.ResetGuest = d->resetGuest;
+    Vars.flySpeed = d->flySpeed;
+    Vars.flyhei = d->flyhei;
+    Vars.khoangcach = d->khoangcach;
+
+    for (int i = 0; i < 4; ++i) {
+        g_panelCol[i] = d->panelCol[i];
+        g_accentCol[i] = d->accentCol[i];
+    }
+    if (d->menuIconInited) {
+        gMenuIconBtn.pos = ImVec2(d->menuIconPos[0], d->menuIconPos[1]);
+        gMenuIconBtn.inited = true;
+    }
+    CaptureSaveSnapshot(&g_lastSavedSnap);
+    g_saveSnapInited = true;
+}
+
+static void CheckAutoSaveConfig(void)
+{
+    if (!g_autoSave) return;
+    // Wait until user finishes dragging any floating button before saving
+    if (gMenuIconBtn.pressed) return;
+    for (int i = 0; i < FLTBTN_COUNT; ++i) {
+        if (gFltBtn[i].pressed) return;
+    }
+    CicadaSaveData cur;
+    CaptureSaveSnapshot(&cur);
+    if (!g_saveSnapInited || memcmp(&cur, &g_lastSavedSnap, sizeof(CicadaSaveData)) != 0) {
+        SaveAutoSaveConfigNow();
+    }
+}
+
+static void ResetDefaultConfig(void)
+{
+    Vars = Vars_t{};
+    for (int i = 0; i < FLTBTN_COUNT; ++i) {
+        gFltShow[i] = false;
+        gFltBtn[i].inited = false;
+    }
+    gMenuIconBtn.inited = false;
+    g_panelCol[0] = 0.06f; g_panelCol[1] = 0.06f; g_panelCol[2] = 0.09f; g_panelCol[3] = 0.96f;
+    g_accentCol[0] = 0.00f; g_accentCol[1] = 0.88f; g_accentCol[2] = 0.96f; g_accentCol[3] = 1.00f;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud removeObjectForKey:kCicadaSaveKey];
+    [ud synchronize];
+    CaptureSaveSnapshot(&g_lastSavedSnap);
+}
+
 static void DrawMenuIconButton(void)
 {
     FltBtnState &b = gMenuIconBtn;
@@ -462,6 +670,8 @@ ImFont* Urbanist;
                               bytesPerRow:32 * 4];
         }
     }
+
+    LoadAutoSaveConfig();
 
     return self;
 }
@@ -789,6 +999,18 @@ ImFont* Urbanist;
                     }
                     if (ImGui::BeginTabItem((" SETTINGS "))) {
                         ImGui::Spacing();
+                        DrawSection(oxorany("AUTO SAVE & CONFIG"));
+                        if (ImGui::Checkbox("Auto Save Settings (All Options & Buttons)", &g_autoSave)) {
+                            SaveAutoSaveConfigNow();
+                        }
+                        if (ImGui::Button("Save Settings Now")) {
+                            SaveAutoSaveConfigNow();
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Reset Default Settings")) {
+                            ResetDefaultConfig();
+                        }
+                        ImGui::Spacing();
                         DrawSection(oxorany("CICADA THEME CUSTOMIZER"));
                         ImGui::ColorEdit4("Panel Background", g_panelCol);
                         ImGui::ColorEdit4("Accent Neon", g_accentCol);
@@ -829,16 +1051,19 @@ ImFont* Urbanist;
                         ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "HIGH RISK (ki9esso l'players):");
-                        ImGui::TextDisabled("AimKill / AimKill 360 / Telekill / Down Kill V2");
+                        ImGui::TextDisabled("AimKill / Telekill / Down Kill V2");
                         ImGui::Spacing();
-                        ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
+                        ImGui::Checkbox("RESET GUEST (unlock game option + MSDK reset)", &Vars.ResetGuest);
+                        if (ImGui::Button("Force Reset Guest Account Now")) {
+                            Vars.ResetGuest = true;
+                            ExecuteDirectGuestReset();
+                        }
                         if (g_rgState == 1)
-                            ImGui::TextDisabled("config OK: ON -> option 'Delete Guest'");
+                            ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "Reset Guest Active: option 'Reset Guest' unlocked + MSDK ready");
                         else if (g_rgState == -1)
-                            ImGui::TextDisabled("config unavailable (il2cpp API)");
+                            ImGui::TextDisabled("MSDK Direct Reset ready (use Force Reset button)");
                         else
-                            ImGui::TextDisabled("config: ... (retry)");
-                        ImGui::TextDisabled("f l'game -> CONFIRM -> OFF 3awd");
+                            ImGui::TextDisabled("config: initializing...");
                         ImGui::EndTabItem();
                     }
                     ImGui::EndTabBar();
@@ -862,6 +1087,7 @@ ImFont* Urbanist;
             RunTelekill();
             StartAimkill();
             RunResetGuest(); // Reset Guest config (login/lobby — runs always)
+            CheckAutoSaveConfig();
             if (Vars.AimFov > 0) {
                 Vars.isAimFov = true;
             } else {
