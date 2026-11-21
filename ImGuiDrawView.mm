@@ -297,18 +297,19 @@ static void LoadAutoSaveConfig(void)
             gFltBtn[i].inited = true;
         }
     }
-    Vars.Telekill = d->telekill;
+    // Restore combat/auto toggles & floating button visibility; keep manual movement/time-stop OFF at app launch
+    Vars.Telekill = false;
     Vars.AimKillSend = d->aimKillSend;
-    Vars.fly = d->fly;
-    Vars.Flyingtest = d->flyingtest;
-    Vars.FlyOp = d->flyOp;
-    Vars.FlyJump = d->flyJump;
-    Vars.StopTime = d->stopTime;
-    Vars.TeleMark = d->teleMark;
+    Vars.fly = false;
+    Vars.Flyingtest = false;
+    Vars.FlyOp = false;
+    Vars.FlyJump = false;
+    Vars.StopTime = false;
+    Vars.TeleMark = false;
     Vars.AutoMark = d->autoMark;
-    Vars.DownKillV2 = d->downKillV2;
-    Vars.Ghost = d->ghost;
-    Vars.UnderGround = d->underGround;
+    Vars.DownKillV2 = false;
+    Vars.Ghost = false;
+    Vars.UnderGround = false;
     Vars.AutoUnder = d->autoUnder;
     Vars.AutoSky = d->autoSky;
     Vars.ResetGuest = false; // never auto-reset guest on launch
@@ -1103,22 +1104,37 @@ ImFont* Urbanist;
         ImGui::PopStyleColor(7);
     }
             ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
-            get_players();
-            aimbot();
+            // Always initialize game_sdk FIRST before any feature or ESP function!
             game_sdk->init();
-            // ported features — after init() so every function pointer is set
-            RunMarkTP(); // runs BEFORE RunFlyV2 so Auto Sky chain triggers Sky TP in the same frame
-            RunFly();
-            RunFlyV2();
-            RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
-            RunFlyJump(io.DeltaTime); // FLY JUMP (Elite HighJump: jump held + lift)
-            RunStopTime();
-            RunDownKillV2();
-            RunGhost();
-            RunUnderGround();
-            RunTelekill();
-            StartAimkill();
-            RunResetGuest(); // Reset Guest config (login/lobby — runs always)
+
+            // 8-second startup grace period: while the Garena splash logo & initial IL2CPP bootstrap run,
+            // only render the CICADA icon and menu (never call IL2CPP game methods on Frame 1 at launch).
+            static bool s_launchTimeInited = false;
+            static std::chrono::steady_clock::time_point s_launchTime;
+            if (!s_launchTimeInited) {
+                s_launchTimeInited = true;
+                s_launchTime = std::chrono::steady_clock::now();
+            }
+            long long sinceLaunchMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - s_launchTime)
+                                          .count();
+
+            if (sinceLaunchMs >= 8000 && game_sdk->Curent_Match != nullptr) {
+                get_players();
+                aimbot();
+                RunMarkTP(); // runs BEFORE RunFlyV2 so Auto Sky chain triggers Sky TP in the same frame
+                RunFly();
+                RunFlyV2();
+                RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
+                RunFlyJump(io.DeltaTime); // FLY JUMP (Elite HighJump: jump held + lift)
+                RunStopTime();
+                RunDownKillV2();
+                RunGhost();
+                RunUnderGround();
+                RunTelekill();
+                StartAimkill();
+                RunResetGuest();
+            }
             CheckAutoSaveConfig();
             if (Vars.AimFov > 0) {
                 Vars.isAimFov = true;

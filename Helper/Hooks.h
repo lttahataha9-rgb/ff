@@ -92,6 +92,9 @@ game_sdk_t *game_sdk = new game_sdk_t();
 
 void game_sdk_t::init()
 {
+    static bool s_inited = false;
+    if (s_inited && this->Curent_Match)
+        return;
     // ======================== [تم التحديث: GetHp] ========================
     // القديم: 0x54A4CA4
     // الجديد: 0x56AA7C8
@@ -226,6 +229,8 @@ void game_sdk_t::init()
     // القديم: 0x54323E4
     // الجديد: 0x5636224
     this->_getRightForeArmTF = (void *(*)(void *))getRealOffset(oxo("0x5636224"));
+    if (this->Curent_Match)
+        s_inited = true;
 }
 
 namespace Camera$$WorldToScreen
@@ -817,11 +822,27 @@ void aimbot()
     ImVec2 EnemyLocation = Camera$$WorldToScreen::Regular(GetHeadPosition(playertarget));
     drawlineglow(draw_list, ImVec2(center.x, center.y), EnemyLocation, ImColor(255, 255, 255), 1, 3);
 }
-// GameFacade.CurrentInGameUIScene() = 0x5918DB4 — null f lobby/FE, non-null f l'match
+// GameFacade.CurrentInGameUIScene() = 0x5918DB4 — guarded by live match & local player so it can NEVER crash at Garena logo/lobby
 static void *GetInGameUIScene()
 {
+    if (!game_sdk || !game_sdk->Curent_Match || !game_sdk->GetLocalPlayer ||
+        !game_sdk->Component_GetTransform || !game_sdk->get_MaxHP)
+        return nullptr;
+    void *match = game_sdk->Curent_Match();
+    if (!match || (uintptr_t)match <= 0x100000000ULL || ((uintptr_t)match >> 48) != 0)
+        return nullptr;
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local || (uintptr_t)local <= 0x100000000ULL || ((uintptr_t)local >> 48) != 0)
+        return nullptr;
+    if (!game_sdk->Component_GetTransform(local))
+        return nullptr;
+    if (game_sdk->get_MaxHP(local) <= 0)
+        return nullptr;
     static void *(*fn)() = (void *(*)())getRealOffset(oxo("0x5918DB4"));
-    return fn ? fn() : nullptr;
+    void *scene = fn ? fn() : nullptr;
+    if (!scene || (uintptr_t)scene <= 0x100000000ULL || ((uintptr_t)scene >> 48) != 0)
+        return nullptr;
+    return scene;
 }
 
 void draw_watermark()
@@ -2939,6 +2960,10 @@ static bool IsCSCountdownZeroZero(void *scene, uint32_t phase)
 void RunMarkTP()
 {
     g_markDbg = 0;
+
+    if (!Vars.TeleMark && !Vars.AutoMark && !Vars.AutoSky &&
+        !g_tpPin && !s_teleMarkChainPending && !s_teleMarkChainSkyTpPending && !g_skyActivatedByAuto)
+        return;
 
     // Poll the Auto Sky chain every frame
     PollTeleportMarkChain();
