@@ -2098,6 +2098,15 @@ static bool GndProt(void *addr, size_t len, int prot)
     return vm_protect(mach_task_self(), (vm_address_t)s, (vm_size_t)n, false,
                       (vm_prot_t)prot | VM_PROT_COPY) == KERN_SUCCESS;
 }
+// I-cache flush ba3d l-patch: sys_icache_invalidate (Darwin, libSystem).
+// `__builtin___clear_cache` MA-KHDEMCH hna: clang-11 kay-taleb `___clear_cache`
+// li ma-marsadch f l-link dyal theos -> "Undefined symbols" / BUILD FAILED.
+#if __has_include(<libkern/OSCacheControl.h>)
+#include <libkern/OSCacheControl.h>
+#else
+extern "C" void sys_icache_invalidate(void *start, size_t len);
+#endif
+
 static bool GndWrite(int i, const uint32_t *words)
 {
     void *p = g_gndFn[i];
@@ -2113,7 +2122,7 @@ static bool GndWrite(int i, const uint32_t *words)
     {
         *(volatile uint32_t *)p = words[0];
         *(volatile uint32_t *)((char *)p + 4) = words[1];
-        __builtin___clear_cache((char *)p, (char *)p + 8);
+        sys_icache_invalidate(p, 8);
         return true;
     }
     // 2) fallback: RW -> write -> RX (window sghir bzzaf)
@@ -2121,7 +2130,7 @@ static bool GndWrite(int i, const uint32_t *words)
         return false;
     *(volatile uint32_t *)p = words[0];
     *(volatile uint32_t *)((char *)p + 4) = words[1];
-    __builtin___clear_cache((char *)p, (char *)p + 8);
+    sys_icache_invalidate(p, 8);
     GndProt(p, 8, PROT_READ | PROT_EXEC);
     return true;
 }
