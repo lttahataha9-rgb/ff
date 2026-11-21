@@ -838,7 +838,7 @@ static void *GetInGameUIScene()
         return nullptr;
     if (game_sdk->get_MaxHP(local) <= 0)
         return nullptr;
-    static void *(*fn)() = (void *(*)())getRealOffset(oxo("0x5918DB4"));
+    void *(*fn)() = (void *(*)())getRealOffset(oxo("0x5918DB4"));
     void *scene = fn ? fn() : nullptr;
     if (!scene || (uintptr_t)scene <= 0x100000000ULL || ((uintptr_t)scene >> 48) != 0)
         return nullptr;
@@ -967,7 +967,7 @@ static int flyZPhase = 0;      // ECSMatchPhase raw (0 Waiting / 1 Prepare / 2 F
 static bool flyTPDone = false; // one-shot sky blast done -> free horizontal sky hover
 static bool g_skyActivatedByAuto = false;
 static bool g_skyTpNextDropZoneGather = false;
-static Vector3 g_roundAnchorPos = {0.0f, 0.0f, 0.0f};
+static Vector3 g_roundAnchorPos; // plain zero-init static (no dynamic init in __mod_init_func)
 static bool g_hasRoundAnchor = false;
 
 static void *GetLocalCharacterController(void *localPlayer)
@@ -1815,9 +1815,9 @@ static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos,
         aikDbgSt = 12;
         return false;
     }
-    // old zexisyy: WeaponDoSomething/Validate called UNCONDITIONALLY (the
+    //old zexisyy: WeaponDoSomething/Validate called UNCONDITIONALLY (the
     // Android EnableShuffleParams gate never fired on iOS -> strike refused)
-    static void (*wValidate)(void *, void *, uint32_t) =
+    void (*wValidate)(void *, void *, uint32_t) =
         (void (*)(void *, void *, uint32_t))getRealOffset(oxo("0x5C2B3F0"));
     if (wValidate)
         wValidate(weapon, checkParams, enemyId); // seedEnc = IdToU32(enemyID)
@@ -2778,7 +2778,7 @@ static bool s_teleMarkChainPending = false;
 static bool s_teleMarkChainSkyTpPending = false;
 static bool s_teleMarkChainWithSkyTp = false;
 static bool s_teleMarkChainHasMark = false;
-static Vector3 s_chainMarkPos = {0.0f, 0.0f, 0.0f};
+static Vector3 s_chainMarkPos; // plain zero-init static (no dynamic init in __mod_init_func)
 static float s_rwidaMinY = 999999.0f;
 static std::chrono::steady_clock::time_point s_teleMarkChainStart;
 static bool s_skyTpFiredForRound = false;

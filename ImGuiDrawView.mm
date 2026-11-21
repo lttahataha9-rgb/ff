@@ -97,7 +97,9 @@ static FltBtnState gMenuIconBtn;
 static ImRect gMenuIconRect = ImRect(0, 0, 0, 0);
 static id<MTLTexture> gCicadaIconTex = nil;
 
-static bool MenDeal = true;   // menu visibility (moved up: FFOverlayView needs it)
+static bool MenDeal = false;   // Start closed at Garena logo; opens when user taps the CICADA icon
+static bool g_userReadyForHooks = false; // Armed only after user taps the CICADA icon once (zero IL2CPP/NSUserDefaults calls at Garena logo!)
+static bool g_autoSaveLoadedOnce = false;
 
 // Touch hit-testing: while the menu is closed the overlay must give the game
 // every touch EXCEPT taps that land on the CICADA menu icon or a floating feature button.
@@ -173,8 +175,8 @@ struct CicadaSaveData {
 
 static CicadaSaveData g_lastSavedSnap = {};
 static bool g_saveSnapInited = false;
-static NSString *const kCicadaSaveKey = @"CicadaAutoSave_v4";
-static NSString *const kCicadaAutoSaveFlagKey = @"CicadaAutoSaveEnabled_v4";
+static NSString *const kCicadaSaveKey = @"CicadaAutoSave_v5";
+static NSString *const kCicadaAutoSaveFlagKey = @"CicadaAutoSaveEnabled_v5";
 
 static void CaptureSaveSnapshot(CicadaSaveData *d)
 {
@@ -239,12 +241,15 @@ static void SaveAutoSaveConfigNow(void)
     CicadaSaveData cur;
     CaptureSaveSnapshot(&cur);
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    // Purge legacy keys from older builds so any old dylib or old key cannot trigger startup crashes
+    [ud removeObjectForKey:@"CicadaAutoSave_v2"];
+    [ud removeObjectForKey:@"CicadaAutoSave_v3"];
+    [ud removeObjectForKey:@"CicadaAutoSave_v4"];
     [ud setBool:g_autoSave forKey:kCicadaAutoSaveFlagKey];
     if (g_autoSave) {
         NSData *blob = [NSData dataWithBytes:&cur length:sizeof(CicadaSaveData)];
         [ud setObject:blob forKey:kCicadaSaveKey];
     }
-    [ud synchronize];
     g_lastSavedSnap = cur;
     g_saveSnapInited = true;
 }
@@ -252,6 +257,9 @@ static void SaveAutoSaveConfigNow(void)
 static void LoadAutoSaveConfig(void)
 {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud removeObjectForKey:@"CicadaAutoSave_v2"];
+    [ud removeObjectForKey:@"CicadaAutoSave_v3"];
+    [ud removeObjectForKey:@"CicadaAutoSave_v4"];
     if ([ud objectForKey:kCicadaAutoSaveFlagKey] != nil) {
         g_autoSave = [ud boolForKey:kCicadaAutoSaveFlagKey];
     }
@@ -411,6 +419,9 @@ static void DrawMenuIconButton(void)
     if (b.pressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         if (!b.moved) {
             MenDeal = !MenDeal;
+            if (!g_userReadyForHooks) {
+                g_userReadyForHooks = true;
+            }
         }
         b.pressed = false; b.moved = false; b.toggled = false;
     }
@@ -683,14 +694,15 @@ ImFont* Urbanist;
         }
     }
 
-    LoadAutoSaveConfig();
-
     return self;
 }
 
 + (void)showChange:(BOOL)open
 {
     MenDeal = open;
+    if (open) {
+        g_userReadyForHooks = true;
+    }
 }
 
 - (MTKView *)mtkView
@@ -1104,38 +1116,31 @@ ImFont* Urbanist;
         ImGui::PopStyleColor(7);
     }
             ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
-            // Always initialize game_sdk FIRST before any feature or ESP function!
-            game_sdk->init();
-
-            // 8-second startup grace period: while the Garena splash logo & initial IL2CPP bootstrap run,
-            // only render the CICADA icon and menu (never call IL2CPP game methods on Frame 1 at launch).
-            static bool s_launchTimeInited = false;
-            static std::chrono::steady_clock::time_point s_launchTime;
-            if (!s_launchTimeInited) {
-                s_launchTimeInited = true;
-                s_launchTime = std::chrono::steady_clock::now();
+            // Do NOT touch IL2CPP or NSUserDefaults during the Garena splash logo!
+            // Everything activates only once the user taps the floating CICADA icon (g_userReadyForHooks).
+            if (g_userReadyForHooks) {
+                if (!g_autoSaveLoadedOnce) {
+                    g_autoSaveLoadedOnce = true;
+                    LoadAutoSaveConfig();
+                }
+                game_sdk->init();
+                if (game_sdk->Curent_Match != nullptr) {
+                    get_players();
+                    aimbot();
+                    RunMarkTP(); // runs BEFORE RunFlyV2 so Auto Sky chain triggers Sky TP in the same frame
+                    RunFly();
+                    RunFlyV2();
+                    RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
+                    RunFlyJump(io.DeltaTime); // FLY JUMP (Elite HighJump: jump held + lift)
+                    RunStopTime();
+                    RunDownKillV2();
+                    RunGhost();
+                    RunUnderGround();
+                    RunTelekill();
+                    StartAimkill();
+                    RunResetGuest();
+                }
             }
-            long long sinceLaunchMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          std::chrono::steady_clock::now() - s_launchTime)
-                                          .count();
-
-            if (sinceLaunchMs >= 8000 && game_sdk->Curent_Match != nullptr) {
-                get_players();
-                aimbot();
-                RunMarkTP(); // runs BEFORE RunFlyV2 so Auto Sky chain triggers Sky TP in the same frame
-                RunFly();
-                RunFlyV2();
-                RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
-                RunFlyJump(io.DeltaTime); // FLY JUMP (Elite HighJump: jump held + lift)
-                RunStopTime();
-                RunDownKillV2();
-                RunGhost();
-                RunUnderGround();
-                RunTelekill();
-                StartAimkill();
-                RunResetGuest();
-            }
-            CheckAutoSaveConfig();
             if (Vars.AimFov > 0) {
                 Vars.isAimFov = true;
             } else {
@@ -1152,6 +1157,9 @@ ImFont* Urbanist;
         }
 
         [commandBuffer commit];
+        if (g_userReadyForHooks && g_autoSaveLoadedOnce) {
+            CheckAutoSaveConfig();
+        }
 }
 
 - (void)mtkView:(MTKView*)view drawableSizeWillChange:(CGSize)size
