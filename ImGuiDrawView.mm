@@ -78,8 +78,8 @@ static UIWindow *SafeHostWindow(void)
 // RIOSSM port (user: "THYD 360 W SEND W AUTO MARK" + "TZID AUTO MARK 00 W KILL 360"
 // + "TRD LYA L AUTO MARK KIF MA KAN"): Send / 360 mchaw, AUTO MARK 00 + KILL 360
 // zado, w Auto Mark l-9dima RJA3T (user: "Rj33-ha m3a l-hop (7 -> 15)").
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_FLYJUP = 5, FLTBTN_TELEMARK = 6, FLTBTN_AUTOMARK = 7, FLTBTN_DOWNCOVER = 8, FLTBTN_GHOST = 9, FLTBTN_FLYAUTO = 10, FLTBTN_AUTO00 = 11, FLTBTN_KILL360 = 12, FLTBTN_COUNT = 13 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_JUFLY = 5, FLTBTN_TELEMARK = 6, FLTBTN_AUTOMARK = 7, FLTBTN_DOWNCOVER = 8, FLTBTN_GHOST = 9, FLTBTN_FLYAUTO = 10, FLTBTN_KILL360 = 11, FLTBTN_COUNT = 12 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -115,14 +115,13 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.78f, 0.35f, 1.00f, 1.00f), // RUNN     - mauve
     ImVec4(1.00f, 0.82f, 0.25f, 1.00f), // STOPTIME - sfer (freeze)
     ImVec4(1.00f, 0.25f, 0.25f, 1.00f), // FLYOP    - 7amra (fly family, snippet)
-    ImVec4(0.75f, 1.00f, 0.20f, 1.00f), // FLYJUP   - chartreuse (jump = energy)
+    ImVec4(0.75f, 1.00f, 0.20f, 1.00f), // JUFLY    - chartreuse (jump = energy)
     ImVec4(0.25f, 0.60f, 1.00f, 1.00f), // TELEMARK - azr9 (teleport)
     ImVec4(1.00f, 0.55f, 0.05f, 1.00f), // AUTOMARK - orange (kif kan l-9dim)
     ImVec4(0.15f, 0.90f, 0.40f, 1.00f), // DOWNCOVER - khadra (cover)
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
     ImVec4(1.00f, 0.35f, 0.70f, 1.00f), // FLYAUTO  - wardi (pink, fly family — RIOSSM FLYAUTO)
-    // ---- lounat RIOSSM (port jdod: AUTO MARK 00 + KILL 360) ----
-    ImVec4(0.58f, 0.32f, 1.00f, 1.00f), // AUTO MARK 00 - violet (RIOSSM autounderground)
+    // ---- loun RIOSSM ----
     ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // KILL 360     - cyan (RIOSSM aimkilltestv2)
 };
 
@@ -507,8 +506,8 @@ ImFont* Urbanist;
                 case FLTBTN_FLYOP:
                     DrawFloatingButton(i, oxorany("Fly Op"), &Vars.FlyOp);
                     break;
-                case FLTBTN_FLYJUP:
-                    DrawFloatingButton(i, oxorany("Fly Jump"), &Vars.FlyJump);
+                case FLTBTN_JUFLY:
+                    DrawFloatingButton(i, oxorany("JU FLY"), &Vars.JuFly);
                     break;
                 case FLTBTN_TELEMARK:
                     DrawFloatingButton(i, oxorany("Tele Mark"), &Vars.TeleMark);
@@ -524,9 +523,6 @@ ImFont* Urbanist;
                     break;
                 case FLTBTN_FLYAUTO:
                     DrawFloatingButton(i, oxorany("FLYAUTO"), &Vars.FlyAuto); // RIOSSM label
-                    break;
-                case FLTBTN_AUTO00: // RIOSSM "AUTO MARK 00" (label dyalo l-asli)
-                    DrawFloatingButton(i, oxorany("AUTO MARK 00"), &Vars.AutoMark00);
                     break;
                 }
             }
@@ -625,8 +621,8 @@ ImFont* Urbanist;
                             if (ImGui::Checkbox(oxorany("Fly Op"), &Vars.FlyOp))
                                 gFltShow[FLTBTN_FLYOP] = Vars.FlyOp; // panel = latch dyal l'button f ecran
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Fly Jump"), &Vars.FlyJump))
-                                gFltShow[FLTBTN_FLYJUP] = Vars.FlyJump;
+                            if (ImGui::Checkbox(oxorany("JU FLY"), &Vars.JuFly))
+                                gFltShow[FLTBTN_JUFLY] = Vars.JuFly;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
@@ -648,12 +644,6 @@ ImFont* Urbanist;
                         ImGui::SliderFloat(oxorany("SPEED AUTO"), &Vars.FlyAutoSpeed, 0.0f, 0.5f, "%.2f v"); // RIOSSM: 0..0.5, default 0.110
                         ImGui::SliderFloat(oxorany("DELAY AUTO"), &Vars.FlyAutoDelay, 0.0f, 10.0f, "%.1f v"); // RIOSSM: 0..10 s, default 1.8 -> auto-off
                         ImGui::Spacing();
-                        // ---- AUTO MARK 00 (RIOSSM "autounderground") — labels dyalo ----
-                        if (ImGui::Checkbox(oxorany("Button AUTO MARK 00"), &Vars.AutoMark00)) gFltShow[FLTBTN_AUTO00] = Vars.AutoMark00;
-                        ImGui::SliderFloat(oxorany("SPEED 00"), &Vars.Am00Speed, 0.0f, 0.05f, "%.3f"); // RIOSSM: clamp 0..0.05 m/tick
-                        ImGui::SliderFloat(oxorany("DELAY 00"), &Vars.Am00Delay, 0.0f, 10.0f, "%.1f s"); // RIOSSM: delay qbel ma ybda
-                        ImGui::SliderFloat(oxorany("RADIUS 00"), &Vars.Am00Radius, 2.0f, 60.0f, "%.0f m"); // 3douwwa li9rib f had l-mssa7a
-                        ImGui::SliderFloat(oxorany("RUN 00"), &Vars.Am00Run, 0.5f, 15.0f, "%.1f s"); // mdda dyal l-approach qbel ma-yw9ef w y3awd
                         ImGui::TextDisabled("Stop Time = freeze / DOWN COVER = nozol+flip / Ghost = underground");
                         ImGui::EndTabItem();
                     }
@@ -686,9 +676,9 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
-                        ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark / Auto Mark");
+                        ImGui::TextDisabled("Fly V2 / Fly Op / JU FLY / Stop Time / Ghost / Tele Mark / Auto Mark");
                         ImGui::TextDisabled("FLY AUTO = SPEED AUTO rise, DELAY AUTO s then auto-off");
-                        ImGui::TextDisabled("AUTO MARK 00 = DELAY -> mchi l-3douwwa li9rib f RADIUS (b SPEED)");
+                        ImGui::TextDisabled("JU FLY = isGrounded -> true (jump w fly khdmo m3a b3dhom)");
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
@@ -722,8 +712,7 @@ ImFont* Urbanist;
             RunFlyV2();
             RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
             RunFlyAuto(io.DeltaTime); // FLY AUTO (RIOSSM flyair): rise + DELAY auto-off
-            RunFlyJump(io.DeltaTime); // FLY JUMP v2: HIS jump -> +2 m step
-            RunGroundedCheat(); // FORCE GROUNDED (user snippet) -> jump y-khdem m3a FlyAuto
+            RunGroundedCheat(); // JU FLY (user snippet: juflyYy) -> isGrounded = true
             RunStopTime();
             RunDownCover();
             RunGhost();

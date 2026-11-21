@@ -40,7 +40,7 @@ struct Vars_t
     float khoangcach = 10.0f;
     // ---- ported from Android EliteXzp (the "Elite" project) ----
     bool FlyOp = {};       // FLY OP (user snippet "FLY HACK OP"): +0.10 m/frame rise (iOS port)
-    bool FlyJump = {};     // FLY JUMP v2: HIS jump -> +2 m step ("ytl3ni darj")
+    bool JuFly = {};      // JU FLY (juflyYy dyal snippet): isGrounded -> true
     // ---- FLY AUTO (ported from RIOSSM 261 "_no_login.dylib", key "flyair") ----
     bool FlyAuto = {};           // FLYAUTO switch (RIOSSM g_flyAir): rise + self auto-off
     float FlyAutoSpeed = 0.11f;  // "SPEED AUTO" slider 0..0.5 (RIOSSM default 0.110)
@@ -1987,71 +1987,18 @@ void RunFlyAuto(float dt)
     }
 }
 
-// ---- FLY JUMP v2 (user: "bghit fly jump mnin nqez ytl3ni b darajat, --------
-// "machi kima darti nta") — v1 REMOVED (forced OnBtnDown every frame + smooth
-// 30 m/s = the game auto-jumping + continuous fly; user doesn't want that).
-// v2 = HIS OWN jump triggers ONE +2.0 m step ("ytl3ni darj"):
-//   jump onset = per-frame Y speed > 4 m/s (dt-based: same at 60 and 120 Hz;
-//   walking / slopes / elevators stay under it) while NOT already rising ->
-//   exactly ONE boost per jump (rising continues until the apex; falling or
-//   standing resets the detector, so the next jump gets the next step).
-// First frame after enable = baseline only (no spurious boost). No button is
-// forced anymore (nothing to release on OFF).
-static float g_fjLastY = 0.0f;
-static bool g_fjRising = false;
-static bool g_fjArmed = false;
-void RunFlyJump(float dt)
-{
-    if (!Vars.FlyJump)
-    {
-        g_fjArmed = false;
-        g_fjRising = false;
-        return;
-    }
-    void *match = game_sdk->Curent_Match();
-    if (!match)
-        return;
-    void *local = game_sdk->GetLocalPlayer(match);
-    if (!local || game_sdk->get_MaxHP(local) <= 0)
-    {
-        g_fjArmed = false;
-        return; // lobby / dead
-    }
-    void *tf = game_sdk->Component_GetTransform(local);
-    if (!tf)
-        return;
-    Vector3 pos = game_sdk->get_position(tf);
-    if (pos == Vector3::zero())
-        return;
-    if (!g_fjArmed)
-    {
-        g_fjArmed = true;
-        g_fjLastY = pos.y;
-        g_fjRising = false;
-        return; // baseline frame — ma n-trigger-ich f l'enable
-    }
-    float step = (dt > 0.0f && dt < 0.25f) ? dt : 0.016f;
-    float dy = pos.y - g_fjLastY;
-    g_fjLastY = pos.y;
-    bool rising = (dy / step) > 4.0f; // jump launch speed (m/s), frame-rate safe
-    bool onset = rising && !g_fjRising; // flat/falling -> now rising = HE jumped
-    g_fjRising = rising;
-    if (onset)
-    {
-        pos.y += 2.0f; // ONE step per jump ("ytl3ni darj")
-        Transform_SetPosition(tf, pos);
-        g_fjLastY = pos.y; // next frame measured from the post-boost position
-    }
-}
+// ---- FLY JUMP REMOVED (user: "THYD DAK FLY JUMP W TZID HADA LI RANSFT LIK") --
+// l-code dyal v2 (jump onset -> ONE +2.0 m step) t-hiyed kamel w t-bddel b
+// JU FLY (Vars.JuFly = juflyYy dyal l-snippet) li kay-sayt l-isGrounded.
 
-// ---- FORCE GROUNDED (user snippet, NO substrate) ---------------------------
-// user: "ZID HAD L METHOD T FLY JUMP M3A FLY AUTO BCH YKHDM"
+// ---- FORCE GROUNDED / JU FLY (user snippet, NO substrate) ------------------
+// user: "ZID HAD L METHOD T JU FLY M3A FLY AUTO BCH YKHDM" (ex-FLY JUMP)
 // Snippet dyalo: hook get_isGrounded / get_IsGrounded -> "if (flag) return true".
 // HNA makaynch MobileSubstrate (ESign crash) -> n-patchiw l-code dyal l-getter
 // nefsso w n-3awedh mnin yte7ti:
 //     mov w0, #1   (0x52800020)
 //     ret          (0xD65F03C0)
-// 8 bytes. Gate = Vars.FlyJump || Vars.FlyAuto (nfs l-flag dyalo) + lobby
+// 8 bytes. Gate = Vars.JuFly || Vars.FlyAuto (nfs l-flag dyalo) + lobby
 // guard (get_MaxHP <= 0) -> n-3awed l-orig. State-change ghir (ma n-mprotect-ch
 // kol frame).
 // Targets (dump.cs iOS 1.132.X), juuj li f snippet nefsso:
@@ -2155,7 +2102,7 @@ void RunGroundedCheat()
         return; // offsets ma-tqdlch -> fail-closed, ghir ma ndiro walou
     void *m = game_sdk->Curent_Match();
     void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
-    bool want = (Vars.FlyJump || Vars.FlyAuto) && local && game_sdk->get_MaxHP(local) > 0;
+    bool want = (Vars.JuFly || Vars.FlyAuto) && local && game_sdk->get_MaxHP(local) > 0;
     if (want == g_gndOn)
         return; // state already matches -> ma n-mprotect-ch kol frame
     bool allOk = true;
