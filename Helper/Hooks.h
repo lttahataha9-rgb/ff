@@ -2638,6 +2638,7 @@ struct AimkillApi {
     COW_GamePlay_IHAAMHPPLMG_o (*getPlayerID)(void *);
     uint32_t (*playerIDToUint)(COW_GamePlay_IHAAMHPPLMG_o);
     void *(*packVector3)(Vector3);
+    void *(*packQuaternion)(Quaternion);
     float (*realtimeSinceStartup)();
     bool  (*gameFacadeSend)(uint32_t, void *, uint8_t, bool);
 };
@@ -2662,9 +2663,23 @@ static void InitApi() {
     api.getPlayerID          = (decltype(api.getPlayerID))          getRealOffset(OFF_Zexis_GetPlayerID);
     api.playerIDToUint       = (decltype(api.playerIDToUint))       getRealOffset(OFF_Zexis_PlayerIDToUint);
     api.packVector3          = (decltype(api.packVector3))          getRealOffset(OFF_Zexis_PackVector3);
+    api.packQuaternion       = (decltype(api.packQuaternion))       getRealOffset(0x3715ED4);
     api.realtimeSinceStartup = (decltype(api.realtimeSinceStartup)) getRealOffset(OFF_Zexis_RealtimeSinceStartup);
     api.gameFacadeSend       = (decltype(api.gameFacadeSend))       getRealOffset(OFF_Zexis_GameFacade_Send);
     apiReady = true;
+}
+
+// RIOSSM fn_a5508: server-side rotation packet (opcode 0x7E0 = 2016)
+// Rotates the server state to face each enemy head in 360° right before their 106 packet
+// WITHOUT touching client set_aim (camera never moves or sticks).
+static void SendRot7E0(Vector3 firePos, Vector3 enemyHead) {
+    if (!api.packQuaternion || !api.gameFacadeSend) return;
+    Vector3 diff = enemyHead - firePos;
+    if ((diff.x * diff.x + diff.y * diff.y + diff.z * diff.z) < 0.0001f) return;
+    Quaternion rot = Quaternion::LookRotation(diff, Vector3(0, 1, 0));
+    void *rotMsg = api.packQuaternion(rot);
+    if (rotMsg)
+        api.gameFacadeSend(0x7E0, rotMsg, 0, false);
 }
 
 // ---- 360° config (from V2 loop) ----
@@ -2676,7 +2691,7 @@ struct AimKill360Cfg {
     float MaxRange;     // default 6000.f
     float Cooldown;     // seconds; 0 = every frame
 };
-static AimKill360Cfg cfg{true, 32, 2, 1.f, 6000.f, 0.f};
+static AimKill360Cfg cfg{true, 32, 3, 1.f, 6000.f, 0.f};
 static float g_nextFireTime = 0.f;
 
 // ---- target filtering (yours + V2 SDK checks, raycast from localHead so TP sees all at once) ----
@@ -2717,13 +2732,15 @@ static std::vector<void *> GetPlayerList360(void *match) {
     return out;
 }
 
-// ---- send message 106 + 108 reset for one target so all targets register in the same frame ----
+// ---- send message 0x7E0 + 106 + 108 reset for one target (RIOSSM exact sequence) ----
 static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
                            int weaponId, int baseDamage,
                            void *objectPool,
                            COW_GamePlay_IHAAMHPPLMG_o localPlayerId,
                            void *damageInfo, uint32_t uniqueId,
-                           Vector3 localHead) {
+                           Vector3 firePos) {
+
+    if (game_sdk->get_IsDieing(t.enemy) || game_sdk->GetHp(t.enemy) <= 0) return;
 
     void *headCollider = api.getHeadCollider(t.enemy);
     if (!headCollider) return;
@@ -2740,25 +2757,20 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
         *(COW_GamePlay_IHAAMHPPLMG_o *)((char *)damageInfo + OFF_Zexis_DamageInfo_AttackerID) = localPlayerId;
     }
 
-    // object-pool hit data — the same pool layout the dylib's V2 loop writes
+    // RIOSSM 0x000a2288: pool+0x18 = hitObject (headCollider's GameObject), pool+0x20 = headCollider
     char *pool = (char *)objectPool;
     *(void **)(pool + OFF_Zexis_Pool_HitGameObject) = hitObject;
     *(void **)(pool + OFF_Zexis_Pool_HitCollider)   = headCollider;
-    void *aimTarget = *(void **)((uint64_t)t.enemy + OFF_Zexis_Player_AimTarget);
-    if (aimTarget) {
-        *(void **)(pool + OFF_Zexis_Pool_HitGameObject) = api.getGameObject(aimTarget);
-        *(void **)(pool + OFF_Zexis_Pool_HitCollider)   = aimTarget;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_HitLocation) = t.head;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir)      = t.dir;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir2)     = t.dir;
-        *(Vector3 *)(pool + OFF_Zexis_Pool_StartPos)    = localHead;
-        *(int   *)(pool + OFF_Zexis_Pool_Damage)        = baseDamage;
-        *(float *)(pool + OFF_Zexis_Pool_Distance)      = t.dist;
-        *(int   *)(pool + OFF_Zexis_Pool_Flags60)       = 1;
-        *(int   *)(pool + OFF_Zexis_Pool_Flags64)       = 1;
-        *(bool  *)(pool + OFF_Zexis_Pool_Flag70)        = true;
-        *(bool  *)(pool + OFF_Zexis_Pool_Flag71)        = true;
-    }
+    *(Vector3 *)(pool + OFF_Zexis_Pool_HitLocation) = t.head;
+    *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir)      = t.dir;
+    *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir2)     = t.dir;
+    *(Vector3 *)(pool + OFF_Zexis_Pool_StartPos)    = firePos;
+    *(int   *)(pool + OFF_Zexis_Pool_Damage)        = baseDamage;
+    *(float *)(pool + OFF_Zexis_Pool_Distance)      = t.dist;
+    *(int   *)(pool + OFF_Zexis_Pool_Flags60)       = 1;
+    *(int   *)(pool + OFF_Zexis_Pool_Flags64)       = 1;
+    *(bool  *)(pool + OFF_Zexis_Pool_Flag70)        = true;
+    *(bool  *)(pool + OFF_Zexis_Pool_Flag71)        = true;
 
     uint32_t simTick = 0;
     void *simTimer = api.currentSimTimer(nullptr);
@@ -2767,49 +2779,54 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
         AikStoreHitHash(weapon, t.enemy, simTick);
     }
 
-    api.startFiring(local, weapon);
+    uint32_t enemyNetId = api.playerIDToUint(api.getPlayerID(t.enemy));
+    if (!enemyNetId) return;
+    uint32_t localNetId = api.playerIDToUint(localPlayerId);
+    if (enemyNetId == localNetId) return;
+    uint32_t weaponField = (weaponId == 1) ? 0u : uniqueId;
 
+    auto *pkt = (message_C2S_RUDP_TakeDamage_Req_o2 *)api.createDamageReq(local);
+    if (!pkt) return;
+
+    pkt->AttackableEntityID = enemyNetId;
+    pkt->RealDamageValue    = 0;
+    pkt->ShieldDamageValue  = 0;
+    pkt->DamageValue        = (uint32_t)game_sdk->GetHp(t.enemy);
+    pkt->DamagerID          = localNetId;
+    pkt->WeaponDataID       = weaponId;
+    pkt->WeaponUniqueID     = weaponField;
+    pkt->HitBodyPart        = 1;
+    pkt->TickCount          = simTick;
+    pkt->FirePos            = (message_PVector3IntPos_o *)api.packVector3(firePos);
+    pkt->TargetPos          = (message_PVector3IntPos_o *)api.packVector3(t.head);
+    pkt->ArmorRatio         = 1.f;
+    pkt->ExtraFlag          = 0;
+    pkt->BaseTime           = api.realtimeSinceStartup();
+    if (!pkt->FirePos || !pkt->TargetPos) return;
+
+    // RIOSSM 0x000a2390..0x000a2524 exact order:
+    // StartFiring -> SendRot7E0(0x7E0) -> GetAimingEntity -> BuildCheckParams -> WeaponDoSomething -> Send(106) -> Send(108) -> StopFire
+    api.startFiring(local, weapon);
+    SendRot7E0(firePos, t.head);
     void *aimingEntity = api.getAimingEntity(local, objectPool);
     void *checkParams  = api.buildCheckParams(weapon, t.enemy, headCollider, false, nullptr);
-    if (!checkParams) {
+    if (!checkParams || *(int32_t *)((uintptr_t)checkParams + 0x18) <= 0) {
         api.stopFire(local, weapon);
         aikDbgSt = 12;
         return;
     }
 
-    uint32_t enemyNetId = api.playerIDToUint(api.getPlayerID(t.enemy));
+    pkt->CheckParams = (monoList<float *> *)checkParams;
     api.weaponDoSomething(weapon, checkParams, enemyNetId);
+    api.gameFacadeSend(OFF_Zexis_TakeDamageMsgId, pkt, 2, 0);
+    aikDbgSent++;
+    aikDbgSt = 9;
 
-    uint32_t localNetId = api.playerIDToUint(api.getPlayerID(local));
-    uint32_t weaponField = (weaponId == 1) ? 0u : uniqueId;
-
-    auto *pkt = (message_C2S_RUDP_TakeDamage_Req_o2 *)api.createDamageReq(local);
-    if (pkt) {
-        pkt->AttackableEntityID = enemyNetId;
-        pkt->RealDamageValue    = 0;
-        pkt->ShieldDamageValue  = 0;
-        pkt->DamageValue        = (uint32_t)game_sdk->GetHp(t.enemy);  // instant kill
-        pkt->DamagerID          = localNetId;
-        pkt->WeaponDataID       = weaponId;
-        pkt->WeaponUniqueID     = weaponField;
-        pkt->HitBodyPart        = 1;                                   // head
-        pkt->TickCount          = simTick;
-        pkt->FirePos            = (message_PVector3IntPos_o *)api.packVector3(localHead);
-        pkt->TargetPos          = (message_PVector3IntPos_o *)api.packVector3(t.head);
-        pkt->CheckParams        = (monoList<float *> *)checkParams;
-        pkt->ArmorRatio         = 1.f;
-        pkt->ExtraFlag          = 0;
-        pkt->BaseTime           = api.realtimeSinceStartup();
-        api.gameFacadeSend(OFF_Zexis_TakeDamageMsgId, pkt, 2, 0);
-        aikDbgSent++;
-        aikDbgSt = 9;
-    }
-    api.stopFire(local, weapon);
-    // Immediately send opcode 108 weapon-swap/reload sync + reset swap timer
-    // so the server resets the gun's fire-rate limit before the next target in this same frame
+    // RIOSSM 0x000a2498..0x000a2500: send 108 reload/swap packet while enemy alive before StopFire
     Send108(local, t.enemy);
+    api.stopFire(local, weapon);
     aik.ResetSwapTime(local);
-    (void)aimingEntity; (void)hitObject;
+    (void)aimingEntity;
 }
 
 // ======================= MAIN MERGED METHOD ===============================
@@ -2848,14 +2865,22 @@ void StartAimkill() {
     Vector3 localHead;
     if (!AikHeadPos(local, &localHead)) { aikDbgSt = 10; return; }
 
+    // RIOSSM 0x000a1d54: firePos from local+0x3e8 (MainCameraTransform), fallback to localHead
+    Vector3 firePos = localHead;
+    void *mainCamTf = *(void **)((uintptr_t)local + oxo("0x3e8"));
+    if (mainCamTf) {
+        Vector3 cp = game_sdk->get_position(mainCamTf);
+        if (cp != Vector3::zero()) firePos = cp;
+    }
+
     std::vector<TargetCtx> targets;
     for (void *e : GetPlayerList360(match)) {
         Vector3 eh;
         if (!IsValidTarget(local, e, localHead, &eh)) continue;
-        float d = Vector3::Distance(localHead, eh);
+        float d = Vector3::Distance(firePos, eh);
         if (d < 0.0005f || d > range || d > cfg.MaxRange) continue;
         Vector3 dir{0,0,0};
-        if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - localHead;
+        if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - firePos;
                            dir = {v.x*inv, v.y*inv, v.z*inv}; }
         targets.push_back({e, eh, dir, d});
     }
@@ -2887,7 +2912,7 @@ void StartAimkill() {
     for (int s = 0; s < shots; ++s) {
         for (const TargetCtx &t : targets) {
             SendTakeDamage(local, weapon, t, weaponId, baseDamage,
-                           objectPool, localPlayerId, damageInfo, uniqueId, localHead);
+                           objectPool, localPlayerId, damageInfo, uniqueId, firePos);
             ++sent;
         }
     }
@@ -2896,12 +2921,28 @@ void StartAimkill() {
         g_nextFireTime = now + cfg.Cooldown;
 }
 
-// ==== Send108 — zexisyy part 2 verbatim (AimKill -> Vars.AimKillSend) =======
-// NOTICE: "Message 108 is separate from Aimkill Send. Same code on iOS and
-// Android... Channel is 2. Cache flag is 0. Weapon id 1 sends unique id 0."
+// ==== Send108 — RIOSSM fn_a56b8 direct RVA allocation (works on stripped iOS UnityFramework) =======
 static void *NewReloadPacket() {
+    auto objNew = (void *(*)(void *))getRealOffset(oxo("0xA1103B8"));
+    auto clsInit = (void (*)(void **))getRealOffset(oxo("0xA11121C"));
+    auto typeInfoSlot = (void **)getRealOffset(oxo("0xBB44DA8"));
+    auto ctor = (void (*)(void *))getRealOffset(OFF_Zexis_Msg108_Ctor);
+    if (objNew && typeInfoSlot && ctor) {
+        uintptr_t k = (uintptr_t)(*typeInfoSlot);
+        if ((k & 1) != 0 || (k >> 32) == 0) {
+            if (clsInit) clsInit(typeInfoSlot);
+            k = (uintptr_t)(*typeInfoSlot);
+        }
+        if ((k & 1) == 0 && (k >> 32) != 0) {
+            void *obj = objNew((void *)k);
+            if (obj) {
+                ctor(obj);
+                return obj;
+            }
+        }
+    }
     static void *klass = nullptr;
-    static void *(*objectNew)(void *) = nullptr; // dlsym once — 0-second path
+    static void *(*objectNew)(void *) = nullptr;
     if (!klass) klass = FindGameClass("message", "EOBFCLNNIJH");
     if (!objectNew) objectNew = (void *(*)(void *))UnitySym("il2cpp_object_new");
     if (!klass || !objectNew) return nullptr;
