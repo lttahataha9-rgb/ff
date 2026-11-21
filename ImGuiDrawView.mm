@@ -76,8 +76,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_COUNT = 11 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_UNDERGROUND = 11, FLTBTN_AUTOUNDER = 12, FLTBTN_COUNT = 13 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -127,6 +127,8 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     // ---- lounat JDADE (user: "DIRE LWN JDADE B L BOTON") — 4 boutonat jdad ----
     ImVec4(0.13f, 0.88f, 0.80f, 1.00f), // DOWNKILL2- ferrouj (teal)
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
+    ImVec4(1.00f, 0.38f, 0.15f, 1.00f), // UNDERGROUND - lava orange
+    ImVec4(0.00f, 0.92f, 0.72f, 1.00f), // AUTOUNDER   - neon mint
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -156,8 +158,8 @@ struct CicadaSaveData {
     float fovLineColor[4];
     // Features & Floating Buttons
     bool fltShow[FLTBTN_COUNT];
-    bool telekill, aimKillSend, fly, flyingtest, flyOp, flyJump, stopTime, teleMark, autoMark, downKillV2, ghost, resetGuest;
-    float flySpeed, flyhei, khoangcach;
+    bool telekill, aimKillSend, fly, flyingtest, flyOp, flyJump, stopTime, teleMark, autoMark, downKillV2, ghost, underGround, autoUnder, resetGuest;
+    float flySpeed, flyhei, khoangcach, ugDepth;
     // Theme
     float panelCol[4];
     float accentCol[4];
@@ -170,13 +172,13 @@ struct CicadaSaveData {
 
 static CicadaSaveData g_lastSavedSnap = {};
 static bool g_saveSnapInited = false;
-static NSString *const kCicadaSaveKey = @"CicadaAutoSave_v2";
-static NSString *const kCicadaAutoSaveFlagKey = @"CicadaAutoSaveEnabled_v2";
+static NSString *const kCicadaSaveKey = @"CicadaAutoSave_v3";
+static NSString *const kCicadaAutoSaveFlagKey = @"CicadaAutoSaveEnabled_v3";
 
 static void CaptureSaveSnapshot(CicadaSaveData *d)
 {
     memset(d, 0, sizeof(CicadaSaveData));
-    d->magic = 0xC1CADA02;
+    d->magic = 0xC1CADA03;
     d->autoSave = g_autoSave;
     d->espEnable = Vars.Enable;
     d->lines = Vars.lines;
@@ -213,10 +215,13 @@ static void CaptureSaveSnapshot(CicadaSaveData *d)
     d->autoMark = Vars.AutoMark;
     d->downKillV2 = Vars.DownKillV2;
     d->ghost = Vars.Ghost;
+    d->underGround = Vars.UnderGround;
+    d->autoUnder = Vars.AutoUnder;
     d->resetGuest = Vars.ResetGuest;
     d->flySpeed = Vars.flySpeed;
     d->flyhei = Vars.flyhei;
     d->khoangcach = Vars.khoangcach;
+    d->ugDepth = Vars.UgDepth;
 
     for (int i = 0; i < 4; ++i) {
         d->panelCol[i] = g_panelCol[i];
@@ -260,7 +265,7 @@ static void LoadAutoSaveConfig(void)
         return;
     }
     const CicadaSaveData *d = (const CicadaSaveData *)[blob bytes];
-    if (d->magic != 0xC1CADA02) {
+    if (d->magic != 0xC1CADA03) {
         CaptureSaveSnapshot(&g_lastSavedSnap);
         g_saveSnapInited = true;
         return;
@@ -301,10 +306,13 @@ static void LoadAutoSaveConfig(void)
     Vars.AutoMark = d->autoMark;
     Vars.DownKillV2 = d->downKillV2;
     Vars.Ghost = d->ghost;
+    Vars.UnderGround = d->underGround;
+    Vars.AutoUnder = d->autoUnder;
     Vars.ResetGuest = d->resetGuest;
     Vars.flySpeed = d->flySpeed;
     Vars.flyhei = d->flyhei;
     Vars.khoangcach = d->khoangcach;
+    Vars.UgDepth = d->ugDepth;
 
     for (int i = 0; i < 4; ++i) {
         g_panelCol[i] = d->panelCol[i];
@@ -844,6 +852,12 @@ ImFont* Urbanist;
                 case FLTBTN_GHOST:
                     DrawFloatingButton(i, oxorany("Ghost"), &Vars.Ghost);
                     break;
+                case FLTBTN_UNDERGROUND:
+                    DrawFloatingButton(i, oxorany("Under"), &Vars.UnderGround);
+                    break;
+                case FLTBTN_AUTOUNDER:
+                    DrawFloatingButton(i, oxorany("Auto Under"), &Vars.AutoUnder);
+                    break;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
@@ -991,8 +1005,14 @@ ImFont* Urbanist;
                             if (ImGui::Checkbox(oxorany("Down V2"), &Vars.DownKillV2)) gFltShow[FLTBTN_DOWNKILL2] = Vars.DownKillV2;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Ghost"), &Vars.Ghost)) gFltShow[FLTBTN_GHOST] = Vars.Ghost;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Under Ground"), &Vars.UnderGround)) gFltShow[FLTBTN_UNDERGROUND] = Vars.UnderGround;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Auto Under"), &Vars.AutoUnder)) gFltShow[FLTBTN_AUTOUNDER] = Vars.AutoUnder;
                         }
                         ImGui::EndTable();
+                        ImGui::SliderFloat(oxorany("Under Depth"), &Vars.UgDepth, 1.0f, 6.0f, "%.1f m");
+                        ImGui::TextDisabled("Auto Under = starts automatically when round begins (phase 2)");
                         ImGui::TextDisabled("Stop Time = freeze | Down = ta7t l'ard | Ghost = underground");
                         ImGui::TextDisabled("Mark: %d  |  ST: %.5f", g_markDbg, g_stDeltaShow);
                         ImGui::EndTabItem();
@@ -1083,6 +1103,7 @@ ImFont* Urbanist;
             RunStopTime();
             RunDownKillV2();
             RunGhost();
+            RunUnderGround();
             RunMarkTP();
             RunTelekill();
             StartAimkill();

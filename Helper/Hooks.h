@@ -48,6 +48,9 @@ struct Vars_t
     // ---- ported from Android EliteXzp round 2 (user: "DOWN KILL + V2, FLY FIX, GHOST") ----
     bool DownKillV2 = {};  // DOWN KILL V2: smooth -0.4/f descent to -2.5 m, restore off
     bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
+    bool UnderGround = {}; // UNDER GROUND: manual underground with surface camera
+    bool AutoUnder = {};   // AUTO UNDER: auto-activates underground when round starts (phase == 2)
+    float UgDepth = 2.5f;  // Underground depth in meters
     bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
 } Vars;
 
@@ -2261,6 +2264,153 @@ void RunGhost()
         if (cp != Vector3::zero())
         {
             cp.y = g_ghGroundY + g_ghCamOff;
+            Transform_SetPosition(cam, cp);
+        }
+    }
+}
+
+// ---- UNDER GROUND & AUTO UNDER (Round-Start Underground) --------------------
+// 1) UnderGround: manual toggle — sinks character below surface (-UgDepth),
+//    freezes PhysX gravity/fall, keeps MainCameraTransform at surface level.
+// 2) AutoUnder: automatically engages underground when ECSMatchPhase == 2
+//    (round starts / Fight phase), and restores + re-arms when phase != 2
+//    (between rounds in CS / lobby / post-match) or if player dies.
+static bool g_ugRun = false;
+static float g_ugGroundY = 0.0f;
+static float g_ugCamOff = 1.6f;
+static bool g_auRoundLocked = false; // prevents re-arming mid-round if player died
+
+static void RestoreUnderGround(void *local, void *tf)
+{
+    if (!g_ugRun)
+        return;
+    g_ugRun = false;
+    if (tf)
+    {
+        Vector3 p = game_sdk->get_position(tf);
+        if (p != Vector3::zero())
+        {
+            p.y = g_ugGroundY + 0.5f;
+            for (int i = 0; i < 8; i++)
+                Transform_SetPosition(tf, p);
+            void *rt = GhostRootTf(local);
+            if (rt)
+                for (int i = 0; i < 8; i++)
+                    Transform_SetPosition(rt, p);
+        }
+    }
+}
+
+void RunUnderGround()
+{
+    if (Vars.Ghost)
+    {
+        g_ugRun = false;
+        return; // Ghost owns underground position if both are enabled
+    }
+
+    void *scene = GetInGameUIScene();
+    uint32_t phase = scene ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18")) : 0;
+
+    if (phase != 2)
+    {
+        g_auRoundLocked = false; // re-arm Auto Under for next round
+    }
+
+    void *m = game_sdk->Curent_Match();
+    if (!m)
+    {
+        g_ugRun = false;
+        return;
+    }
+    void *local = game_sdk->GetLocalPlayer(m);
+    if (!local || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_ugRun = false;
+        return;
+    }
+    void *tf = game_sdk->Component_GetTransform(local);
+    if (!tf)
+    {
+        g_ugRun = false;
+        return;
+    }
+
+    bool isDead = (game_sdk->get_IsDieing && game_sdk->get_IsDieing(local)) || game_sdk->GetHp(local) <= 0;
+    if (isDead)
+    {
+        if (Vars.AutoUnder && phase == 2)
+            g_auRoundLocked = true;
+        RestoreUnderGround(local, tf);
+        return;
+    }
+
+    bool autoWant = (Vars.AutoUnder && scene && phase == 2 && !g_auRoundLocked);
+    bool wantUG = Vars.UnderGround || autoWant;
+
+    if (!wantUG)
+    {
+        RestoreUnderGround(local, tf);
+        return;
+    }
+
+    Vector3 p = game_sdk->get_position(tf);
+    if (p == Vector3::zero())
+        return;
+
+    if (!g_ugRun)
+    {
+        g_ugRun = true;
+        g_ugGroundY = p.y;
+        g_ugCamOff = 1.6f;
+        void *cam0 = *(void **)((uintptr_t)local + oxo("0x3E8"));
+        if (cam0)
+        {
+            Vector3 cp = game_sdk->get_position(cam0);
+            if (cp != Vector3::zero())
+            {
+                float diff = cp.y - g_ugGroundY;
+                if (diff > 0.2f && diff < 5.0f)
+                    g_ugCamOff = diff;
+            }
+        }
+    }
+
+    float depth = Vars.UgDepth;
+    if (depth < 0.5f) depth = 0.5f;
+    if (depth > 8.0f) depth = 8.0f;
+
+    Vector3 ug = p;
+    ug.y = g_ugGroundY - depth;
+
+    // Freeze PhysX vertical/fall velocity so anti-clip doesn't rubberband us up
+    void *px = *(void **)((uintptr_t)local + oxo("0x1D48"));
+    if (px && (uintptr_t)px > 0xFFFF)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            *(float *)((uintptr_t)px + oxo("0x40")) = 0.0f;
+            *(float *)((uintptr_t)px + oxo("0x44")) = 0.0f;
+            *(Vector3 *)((uintptr_t)px + oxo("0x34")) = Vector3(0, 0, 0);
+            *(Vector3 *)((uintptr_t)px + oxo("0x28")) = Vector3(0, 0, 0);
+        }
+    }
+
+    for (int i = 0; i < 5; i++)
+        Transform_SetPosition(tf, ug);
+    void *rt = GhostRootTf(local);
+    if (rt)
+        for (int i = 0; i < 5; i++)
+            Transform_SetPosition(rt, ug);
+
+    // Keep camera at surface level so you can see & shoot normally above ground
+    void *cam = *(void **)((uintptr_t)local + oxo("0x3E8"));
+    if (cam)
+    {
+        Vector3 cp = game_sdk->get_position(cam);
+        if (cp != Vector3::zero())
+        {
+            cp.y = g_ugGroundY + g_ugCamOff;
             Transform_SetPosition(cam, cp);
         }
     }
