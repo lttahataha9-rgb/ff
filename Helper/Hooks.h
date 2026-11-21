@@ -56,10 +56,11 @@ struct Vars_t
     float Am00Radius = 12.0f; // RADIUS 00 m — l-3douwwa lazem tkoun f had l-mssa7a
     float Am00Run = 3.0f;     // RUN 00 s — mdda dyal l-approach qbel ma y3awed (RIOSSM cycle)
     int   Am00Dbg = 0;      // telemetry: 1 = delay / 2 = approach / 3 = 3douwwa b3ida
-    bool Kill360 = {};        // RIOSSM "AIMKILL 360" = aimkilltestv2 (his own aimkill mech.)
-    float K360Speed = 1.0f;   // SPEED 360 0..1 (RIOSSM float clamped 0..1) -> cadence
-    int   K360Count = 5;      // COUNT 360 1..10 (RIOSSM int clamped 1..10) -> strikes/burst
-    float K360Delay = 0.0f;   // DELAY 360 s — pause ba3d l-burst (RIOSSM rate-limit; 0 = fda7la)
+    // KILL 360 (RIOSSM aimkilltestv2) REMOVED — user: "HADIK T RIOS HYDHA MN
+    // L PANEL W NSAHA KHDM LA HADIK LI SFT LIK" -> l-aimkill dyalo (zexisyy
+    // msg 106 + 108, damage capped 3la dm l-3douwwa) ghadi y-khdem bo7do,
+    // bla burst SPEED/COUNT/DELAY 360 w bla ghost rotation.
+    bool AimKill = {};        // AIMKILL (zexisyy StartAimkill: msg 106 + 108)
     // (Fly Ultra sliders removed — user: "t7iyed Fix Fly w Fly Ultra")
     // ---- ported from Android EliteXzp round 2 (user: "DOWN KILL + V2, FLY FIX, GHOST") ----
     // DOWN KILL V2 REMOVED (user: "thyd Down Kill V2 w zid HADI -> DOWN COVER")
@@ -3042,10 +3043,10 @@ static bool SmartCoverKill(void *enemy)
 }
 
 // ==== AikStrikePhase — the strike half of StartAimkill =======================
-// Split out of StartAimkill so the AIMKILL 360 ghost rotation (set_aim at
-// the enemy -> packet -> set_aim back at the player's own view) can be
-// returned on EVERY exit path below, exactly like Elite AimRotationGhost_End
-// sits right after the fire call (EliteMain.cpp L2409-2415).
+// Split out of StartAimkill so the aim rotation (set_aim at the enemy ->
+// packet -> set_aim back at the player's own view) can be returned on EVERY
+// exit path below, exactly like Elite AimRotationGhost_End sits right after
+// the fire call (EliteMain.cpp L2409-2415).  (RIOSSM AIMKILL 360 removed.)
 static void AikStrikePhase(void *local, void *enemy) {
     // fail-closed: every Send-path RVA must resolve (AikInit = dladdr anchor)
     if (!AikInit()) { aikDbgSt = 11; return; }
@@ -3082,19 +3083,10 @@ static void AikStrikePhase(void *local, void *enemy) {
 // 7 not-a-gun (or weapon baseDamage 0) / 8 out-of-range / 9 SENT /
 // 10 no-pool-or-head / 11 AikInit fail (or strike refused w/o a code) /
 // 12 no-checkParams / 13 no-damage-msg / 14 strike gate (dead/LOS/head) /
-// 15 no-TimeService / 16 rate-limited (KILL 360 burst cooldown).  n: 1 = target acquired.
+// 15 no-TimeService.  n: 1 = target acquired.
 // s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
 void StartAimkill() {
-    if (!Vars.Kill360) return; // KILL 360 (RIOSSM aimkilltestv2) — Send removed
-
-    // RIOSSM aimkilltestv2 rate-limit: pause ba3d l-burst (DELAY 360 = 0 -> fda7la)
-    static int k360Burst = 0;
-    static std::chrono::steady_clock::time_point k360Next = std::chrono::steady_clock::now();
-    if (Vars.K360Delay > 0.0f && std::chrono::steady_clock::now() < k360Next)
-    {
-        aikDbgSt = 16; // 16 = rate-limited (RIOSSM 0x5177D8 cooldown)
-        return;
-    }
+    if (!Vars.AimKill) return; // zexisyy StartAimkill — RIOSSM 360 mcha
 
     aikDbgSt = 1;
     aikDbgN = 0;
@@ -3118,54 +3110,12 @@ void StartAimkill() {
     // candidate checks above are all that's left (zexisyy had no LOS gate)
     aikDbgN = 1;
 
-    // AIMKILL 360 — Elite Aimkill360 + AimRotationGhost_Begin/End: face the
-    // enemy ONLY while the hit packet is built, then hand the player's own
-    // rotation straight back in the SAME frame — the view never follows him
-    // ("t9tel bla manchouf fih": kill from behind while you keep looking the
-    // other way, wakha tddar l-aim wraya). Target = GetClosestEnemyAik =
-    // NEAREST living enemy every frame, so a squad in front drops one by one,
-    // fast ("la kano rab3a gadmya: tkhtar aqreb wa7ed w kt9tlo b sor3a").
-    Quaternion aik360Orig;
-    bool aik360Ghost = false;
-    if (Vars.Kill360)
-    {
-        Vector3 eHead = GetHeadPosition(enemy);
-        Vector3 myPos = CameraMain(local);
-        if (eHead != Vector3::zero() && myPos != Vector3::zero())
-        {
-            aik360Orig = GetCurrentRotation(local);
-            game_sdk->set_aim(local, GetRotationToTheLocation(eHead, 0.1f, myPos));
-            aik360Ghost = true;
-        }
-    }
-
-    // strike phase split into its own function so EVERY exit path below
-    // (gate 6/7/8/10/11/12/13/14/15, refused strike) still hands the aim
-    // back — Elite AimRotationGhost_End runs right after the fire call.
+    // zexisyy path ONLY — RIOSSM AIMKILL 360 (ghost rotation + SPEED/COUNT/
+    // DELAY 360 burst) removed on purpose: user "MATKHCHIHACH LYA M3A DIK
+    // 360 T RIOS ... HYDHA MN L PANEL W NSAHA KHDM LA HADIK LI SFT LIK".
+    // Target = GetClosestEnemyAik = NEAREST living enemy every frame, so a
+    // squad drops one by one ("la kano rab3a gadmya: tkhtar aqreb wa7ed").
     AikStrikePhase(local, enemy);
-
-    if (aik360Ghost)
-        game_sdk->set_aim(local, aik360Orig); // Elite AimRotationGhost_End
-
-    // COUNT 360 / DELAY 360 / SPEED 360 — RIOSSM burst + cooldown mapping
-    if (Vars.K360Delay > 0.0f)
-    {
-        k360Burst++;
-        int cnt = Vars.K360Count;
-        if (cnt < 1) cnt = 1;
-        if (cnt > 10) cnt = 10; // RIOSSM clamps each int to 1..10
-        if (k360Burst >= cnt)
-        {
-            k360Burst = 0;
-            float d = Vars.K360Delay;
-            float sp = Vars.K360Speed;
-            if (sp > 0.01f && sp < 1.0f)
-                d = d / sp; // SPEED 360 0..1: 3li 3li -> pause 9sir
-            if (d > 0.0f)
-                k360Next = std::chrono::steady_clock::now() +
-                           std::chrono::milliseconds((long long)(d * 1000.0f));
-        }
-    }
 }
 
 // ==== Send108 — zexisyy part 2 verbatim (kept: AikStrikePhase still calls it;

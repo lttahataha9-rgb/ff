@@ -78,7 +78,7 @@ static UIWindow *SafeHostWindow(void)
 // RIOSSM port (user: "THYD 360 W SEND W AUTO MARK" + "TZID AUTO MARK 00 W KILL 360"
 // + "TRD LYA L AUTO MARK KIF MA KAN"): Send / 360 mchaw, AUTO MARK 00 + KILL 360
 // zado, w Auto Mark l-9dima RJA3T (user: "Rj33-ha m3a l-hop (7 -> 15)").
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_JUFLY = 5, FLTBTN_TELEMARK = 6, FLTBTN_AUTOMARK = 7, FLTBTN_DOWNCOVER = 8, FLTBTN_GHOST = 9, FLTBTN_FLYAUTO = 10, FLTBTN_KILL360 = 11, FLTBTN_COUNT = 12 };
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_JUFLY = 5, FLTBTN_TELEMARK = 6, FLTBTN_AUTOMARK = 7, FLTBTN_DOWNCOVER = 8, FLTBTN_GHOST = 9, FLTBTN_FLYAUTO = 10, FLTBTN_AIMKILL = 11, FLTBTN_COUNT = 12 };
 static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
@@ -122,7 +122,7 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
     ImVec4(1.00f, 0.35f, 0.70f, 1.00f), // FLYAUTO  - wardi (pink, fly family — RIOSSM FLYAUTO)
     // ---- loun RIOSSM ----
-    ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // KILL 360     - cyan (RIOSSM aimkilltestv2)
+    ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // AIMKILL    - cyan (zexisyy 106 + 108)
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -497,8 +497,8 @@ ImFont* Urbanist;
                 case FLTBTN_RUNN:
                     DrawFloatingButton(i, oxorany("Runn"), &Vars.fly);
                     break;
-                case FLTBTN_KILL360: // RIOSSM "AIMKILL 360" (label dyalo l-asli)
-                    DrawFloatingButton(i, oxorany("AIMKILL 360"), &Vars.Kill360);
+                case FLTBTN_AIMKILL: // zexisyy Aimkill Send (msg 106 + 108)
+                    DrawFloatingButton(i, oxorany("AIMKILL"), &Vars.AimKill);
                     break;
                 case FLTBTN_STOPTIME:
                     DrawFloatingButton(i, oxorany("Stop Time"), &Vars.StopTime);
@@ -609,10 +609,7 @@ ImFont* Urbanist;
                         if (ImGui::Checkbox(oxorany("Button Telekill"), &Vars.Telekill)) gFltShow[FLTBTN_TELEKILL] = Vars.Telekill;
                         ImGui::SliderFloat(oxorany("DistanceTelekill"), &Vars.khoangcach, 2.0f, 50.0f, "%.f");
                         ImGui::Spacing();
-                        if (ImGui::Checkbox(oxorany("Button AIMKILL 360"), &Vars.Kill360)) gFltShow[FLTBTN_KILL360] = Vars.Kill360;
-                        ImGui::SliderFloat(oxorany("SPEED 360"), &Vars.K360Speed, 0.0f, 1.0f, "%.2f"); // RIOSSM: float clamped 0..1
-                        ImGui::SliderInt(oxorany("COUNT 360"), &Vars.K360Count, 1, 10);               // RIOSSM: int clamped 1..10
-                        ImGui::SliderFloat(oxorany("DELAY 360"), &Vars.K360Delay, 0.0f, 3.0f, "%.2f s"); // RIOSSM: rate-limit (0 = bla pause)
+                        if (ImGui::Checkbox(oxorany("AIMKILL"), &Vars.AimKill)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKill; // zexisyy msg 106 + 108 (RIOSSM 360 removed)
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime; // own option (user: bouhdo)
                         if (ImGui::BeginTable("splitm", 4))
@@ -682,8 +679,8 @@ ImFont* Urbanist;
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
-                        ImGui::TextDisabled("AIMKILL 360 / Telekill / Down Cover");
-                        ImGui::TextDisabled("AIMKILL 360 = t9tel bla manchouf fih (aim wraya)");
+                        ImGui::TextDisabled("AIMKILL / Telekill / Down Cover");
+                        ImGui::TextDisabled("AIMKILL = msg 106 + 108, damage = dm l-3douwwa");
                         ImGui::TextDisabled("+15 m hop: Tele Mark / Auto Mark / Telekill");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
@@ -719,7 +716,7 @@ ImFont* Urbanist;
             RunMarkTP();
             RunAutoMark00(io.DeltaTime); // AUTO MARK 00 (RIOSSM autounderground): delay -> approach
             RunTelekill();
-            StartAimkill(); // KILL 360 (RIOSSM aimkilltestv2) — gated internally on Vars.Kill360
+            StartAimkill(); // AIMKILL (zexisyy msg 106 + 108) — gated on Vars.AimKill
             RunResetGuest(); // Reset Guest config (login/lobby — runs always)
             // zexisyy msg108 (Send) REMOVED — user: "THYD ... W SEND"
             if (Vars.AimFov > 0) {
