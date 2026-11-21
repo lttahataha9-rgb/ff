@@ -51,6 +51,7 @@ struct Vars_t
     bool UnderGround = {}; // UNDER GROUND: manual underground with surface camera
     bool AutoUnder = {};   // AUTO UNDER: auto-activates underground when round starts (phase == 2)
     float UgDepth = 2.5f;  // Underground depth in meters
+    bool AutoSky = {};     // AUTO SKY TP: teleport to rwida/mark -> auto return to current round safe-zone center in sky
     bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
 } Vars;
 
@@ -929,20 +930,250 @@ void RunFly()
     Transform_SetPosition(localTF, newPosition);
 }
 
-// ---- Fly V2 - BLAST WAHD DIRECT + METHOD L9DIMA (user: "fixi l'sky
-//     teleport... brito kima gelt lik... ydini wast l map l'amnina" +
-//     answered "Blast wahd direct + bla snap-back") ----
-// 1) blast: 3la dor FlyV2 -> teleport WA7D instant f wast l'zone l'amna
-//    f l'jouj (st=1); zone null/ghda2a -> settle f blasti (st=2/3/4)
-//    - bla rise-then-drop (2 jumps), bla snap-back ("ma bghit auto")
-// 2) classic fly: pin ghir Y (exposeY + flyhei), X/Z = FREE (kaymchi 7er
-//    f sma) w slider Fly Height = y-tali3 / y-red ("yredni l'map f sma")
-// FlyV2 state (debug UI line f FEATURES tab)
-static int flyZSt = 0;        // 0 off / 1 zone center / 2 SafeZone null / 3 ZoneDef null / 4 radius ghda2a (sky fallback)
-                             // 5 no in-game scene / 6 phase != Fight
-static float flyZR = 0.0f;    // OuterRadius (debug)
-static int flyZPhase = 0;     // ECSMatchPhase raw (0 Waiting /1 Prepare /2 Fight /3 Post)
-static bool flyTPDone = false; // blast wahd sal — ba3dha = FREE hover (bla snap-back)
+// ============================================================================
+//  SKY TP AUTO & PHYSICS-SYNCED TELEPORT (Ported from Android SkyLaunch/TPFly to iOS 1.132.X)
+//  Dump-verified iOS RVAs & offsets:
+//    - Player.m_CharacterController @ +0x4D8, get_CharacterController() = 0x5631D28
+//    - UnityEngine.Collider.set_enabled(bool) = 0x8DF4858
+//    - UnityEngine.Behaviour.set_enabled(bool) = 0x8D58C68
+//    - UnityEngine.Physics.set_autoSyncTransforms(bool) = 0x8DEB608
+//    - COW.UIMapContentController.GetSafeZoneInnerCenter() = 0x23912F0, m_InnerCenterPos @ +0x6C8
+//    - COW.UIInGameScene.m_CSMatchInfoInfoCtrl @ +0x798 (UIHudCSMatchInfoController: mSeconds @ +0xB0, min @ +0xC0, sec @ +0xC4)
+// ============================================================================
+static int flyZSt = 0;         // 0 off / 1 safe-zone center / 2 gather center / 3 round anchor / 4 local fallback / 5 no scene / 6 phase != Fight
+static float flyZR = 0.0f;     // OuterRadius (debug)
+static int flyZPhase = 0;      // ECSMatchPhase raw (0 Waiting / 1 Prepare / 2 Fight / 3 Post)
+static bool flyTPDone = false; // one-shot sky blast done -> free horizontal sky hover
+static bool g_skyActivatedByAuto = false;
+static bool g_skyTpNextDropZoneGather = false;
+static Vector3 g_roundAnchorPos = {0.0f, 0.0f, 0.0f};
+static bool g_hasRoundAnchor = false;
+
+static void *GetLocalCharacterController(void *localPlayer)
+{
+    if (!localPlayer || (uintptr_t)localPlayer <= 0x100000000ULL)
+        return nullptr;
+    void *cc = *(void **)((uintptr_t)localPlayer + oxo("0x4D8"));
+    if (cc && (uintptr_t)cc > 0x100000000ULL && ((uintptr_t)cc >> 48) == 0)
+        return cc;
+    static void *(*fnGetCC)(void *) = nullptr;
+    static bool tried = false;
+    if (!tried)
+    {
+        tried = true;
+        void *cand = (void *)getRealOffset(oxo("0x5631D28"));
+        Dl_info goodInfo{}, candInfo{};
+        if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+            dladdr(cand, &candInfo) && goodInfo.dli_fbase == candInfo.dli_fbase)
+        {
+            fnGetCC = (void *(*)(void *))cand;
+        }
+    }
+    return fnGetCC ? fnGetCC(localPlayer) : nullptr;
+}
+
+static void SetCCEnabled(void *cc, bool enabled)
+{
+    if (!cc || (uintptr_t)cc <= 0x100000000ULL)
+        return;
+    static void (*fnSetEnabled)(void *, bool) = nullptr;
+    static void (*fnAutoSync)(bool) = nullptr;
+    static bool tried = false;
+    if (!tried)
+    {
+        tried = true;
+        void *cand = (void *)getRealOffset(oxo("0x8DF4858")); // Collider.set_enabled
+        void *syncCand = (void *)getRealOffset(oxo("0x8DEB608")); // Physics.set_autoSyncTransforms
+        Dl_info goodInfo{}, candInfo{};
+        if (dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) && goodInfo.dli_fbase)
+        {
+            if (cand && dladdr(cand, &candInfo) && candInfo.dli_fbase == goodInfo.dli_fbase)
+                fnSetEnabled = (void (*)(void *, bool))cand;
+            if (syncCand && dladdr(syncCand, &candInfo) && candInfo.dli_fbase == goodInfo.dli_fbase)
+                fnAutoSync = (void (*)(bool))syncCand;
+        }
+    }
+    if (fnAutoSync)
+        fnAutoSync(true);
+    if (fnSetEnabled)
+        fnSetEnabled(cc, enabled);
+}
+
+static void ZeroPhysXFallVelocity(void *localPlayer)
+{
+    if (!localPlayer || (uintptr_t)localPlayer <= 0x100000000ULL)
+        return;
+    void *px = *(void **)((uintptr_t)localPlayer + oxo("0x1D48"));
+    if (px && (uintptr_t)px > 0x100000000ULL && ((uintptr_t)px >> 48) == 0)
+    {
+        *(float *)((uintptr_t)px + oxo("0x40")) = 0.0f;
+        *(float *)((uintptr_t)px + oxo("0x44")) = 0.0f;
+        *(Vector3 *)((uintptr_t)px + oxo("0x34")) = Vector3(0.0f, 0.0f, 0.0f);
+        *(Vector3 *)((uintptr_t)px + oxo("0x28")) = Vector3(0.0f, 0.0f, 0.0f);
+    }
+}
+
+// Real player teleport: moves Transform + root Transform AND forces PhysX CharacterController capsule reposition
+static void TeleportPlayerReal(void *localPlayer, void *tf, Vector3 newPos)
+{
+    if (!tf)
+        return;
+    void *cc = GetLocalCharacterController(localPlayer);
+    if (cc)
+        SetCCEnabled(cc, false);
+    Transform_SetPosition(tf, newPos);
+    if (localPlayer)
+    {
+        void *rt = *(void **)((uintptr_t)localPlayer + oxo("0x3D0"));
+        if (rt && (uintptr_t)rt > 0x100000000ULL && rt != tf)
+            Transform_SetPosition(rt, newPos);
+    }
+    if (cc)
+        SetCCEnabled(cc, true);
+    ZeroPhysXFallVelocity(localPlayer);
+}
+
+// Primary: COW.UIMapContentController.GetSafeZoneInnerCenter() (0x23912F0) / m_InnerCenterPos (+0x6C8)
+// Secondary: match->SafeZone (+0x210) -> ZoneDefinition (+0xB8) -> OuterCenter (+0x14)
+static bool BD_TryGetSafeZoneCenter(void *match, Vector3 &out)
+{
+    void *scene = GetInGameUIScene();
+    if (scene && (uintptr_t)scene > 0x100000000ULL)
+    {
+        void *bigMap = *(void **)((uintptr_t)scene + oxo("0x458"));
+        void *mapContent = (bigMap && (uintptr_t)bigMap > 0x100000000ULL)
+                               ? *(void **)((uintptr_t)bigMap + oxo("0xA8"))
+                               : nullptr;
+        if (mapContent && (uintptr_t)mapContent > 0x100000000ULL)
+        {
+            static FFVec3 (*fnSafeZoneInnerCenter)(void *) = nullptr;
+            static bool tried = false;
+            if (!tried)
+            {
+                tried = true;
+                void *cand = (void *)getRealOffset(oxo("0x23912F0"));
+                Dl_info goodInfo{}, candInfo{};
+                if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+                    dladdr(cand, &candInfo) && goodInfo.dli_fbase == candInfo.dli_fbase)
+                {
+                    fnSafeZoneInnerCenter = (FFVec3 (*)(void *))cand;
+                }
+            }
+            Vector3 c = Vector3::zero();
+            if (fnSafeZoneInnerCenter)
+            {
+                FFVec3 r = fnSafeZoneInnerCenter(mapContent);
+                c = Vector3(r.x, r.y, r.z);
+            }
+            if (fabsf(c.x) < 0.01f && fabsf(c.z) < 0.01f)
+            {
+                c = *(Vector3 *)((uintptr_t)mapContent + oxo("0x6C8")); // m_InnerCenterPos
+            }
+            if (fabsf(c.x) > 0.1f || fabsf(c.z) > 0.1f)
+            {
+                out = c;
+                return true;
+            }
+        }
+    }
+
+    if (match && (uintptr_t)match > 0x100000000ULL)
+    {
+        void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
+        void *zoneDef = (safeZone && (uintptr_t)safeZone > 0x100000000ULL)
+                            ? *(void **)((uintptr_t)safeZone + oxo("0xB8"))
+                            : nullptr;
+        if (zoneDef && (uintptr_t)zoneDef > 0x100000000ULL)
+        {
+            Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
+            float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
+            flyZR = zoneR;
+            if (zoneR >= 5.0f && (fabsf(zoneC.x) > 0.1f || fabsf(zoneC.z) > 0.1f))
+            {
+                out = zoneC;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Secondary: average position of alive players in the current round (EXCLUDING localPlayer so a trip to
+// a far-away rwida in another map never pulls the center away from the current round!)
+static bool BD_TryGetZoneGatherCenter(void *match, void *localPlayer, Vector3 &out)
+{
+    if (!match || (uintptr_t)match <= 0x100000000ULL)
+        return false;
+    Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((uintptr_t)match + oxo("0x148"));
+    if (!players)
+        return false;
+    int total = players->getSize();
+    if (total <= 0)
+        return false;
+    if (total > 64)
+        total = 64;
+
+    double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
+    int n = 0;
+    for (int u = 0; u < total; u++)
+    {
+        void *player = players->getValues()[u];
+        if (!player || player == localPlayer)
+            continue;
+        if (!game_sdk->Component_GetTransform(player))
+            continue;
+        if ((game_sdk->get_IsDieing && game_sdk->get_IsDieing(player)) || game_sdk->GetHp(player) <= 0)
+            continue;
+        Vector3 p = getPosition(player);
+        if (p == Vector3::zero())
+            continue;
+        sumX += p.x;
+        sumY += p.y;
+        sumZ += p.z;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    out = Vector3((float)(sumX / n), (float)(sumY / n), (float)(sumZ / n));
+    return true;
+}
+
+// Resolves the exact (X, Y, Z) ground center of the CURRENT round (l rond li fiha 7aliyan)
+static int ResolveCurrentRoundGroundCenter(void *match, void *localPlayer, Vector3 curPos, Vector3 &outGround)
+{
+    Vector3 safeC = Vector3::zero();
+    Vector3 gatherC = Vector3::zero();
+    bool hasSafe = BD_TryGetSafeZoneCenter(match, safeC);
+    bool hasGather = BD_TryGetZoneGatherCenter(match, localPlayer, gatherC);
+
+    if (hasSafe)
+    {
+        // If UIMapContentController returned a 2D map center with Y == 0, fill ground Y from alive players or round anchor
+        if (fabsf(safeC.y) < 0.5f)
+        {
+            if (hasGather && fabsf(gatherC.y) >= 0.5f)
+                safeC.y = gatherC.y;
+            else if (g_hasRoundAnchor && fabsf(g_roundAnchorPos.y) >= 0.5f)
+                safeC.y = g_roundAnchorPos.y;
+            else
+                safeC.y = curPos.y;
+        }
+        outGround = safeC;
+        return 1; // st=1: SafeZone center
+    }
+    if (hasGather)
+    {
+        outGround = gatherC;
+        return 2; // st=2: Alive players gather center in current round
+    }
+    if (g_hasRoundAnchor && g_roundAnchorPos != Vector3::zero())
+    {
+        outGround = g_roundAnchorPos;
+        return 3; // st=3: Saved current round spawn anchor
+    }
+    outGround = curPos;
+    return 4;
+}
 
 void RunFlyV2()
 {
@@ -955,7 +1186,8 @@ void RunFlyV2()
         flyZSt = 0;
         flyZR = 0.0f;
         flyZPhase = 0;
-        flyTPDone = false; // activation jdida = blast jdide (wa7d l'wast zone)
+        flyTPDone = false;
+        g_skyActivatedByAuto = false;
         return;
     }
 
@@ -966,8 +1198,18 @@ void RunFlyV2()
     void *localPlayer = game_sdk->GetLocalPlayer(match);
     if (!localPlayer)
         return;
-    if (game_sdk->get_MaxHP(localPlayer) <= 0)
-        return; // lobby / stale match: not a live player
+    if (game_sdk->get_MaxHP(localPlayer) <= 0 ||
+        (game_sdk->get_IsDieing && game_sdk->get_IsDieing(localPlayer)) ||
+        game_sdk->GetHp(localPlayer) <= 0)
+    {
+        if (g_skyActivatedByAuto)
+        {
+            Vars.Flyingtest = false;
+            g_skyActivatedByAuto = false;
+        }
+        flyTPDone = false;
+        return;
+    }
 
     void *tf = game_sdk->Component_GetTransform(localPlayer);
     if (!tf)
@@ -975,13 +1217,6 @@ void RunFlyV2()
 
     Vector3 pos = game_sdk->get_position(tf);
 
-    // >>> PHASE GATE — Android pattern (ApplyRotationZone: csPhase != 2 → return;
-    //     AutoEnableTPOnPhase2): ECSMatchPhase (OHJMMEGFLLN): 0 Waiting (spawn
-    //     island + tayara) / 1 Prepare / 2 FIGHT (= mora ma tnzel) / 3 Post...
-    //     → teleport/pin GHIR f Fight — hazz l'mochkil "9bel ma tnzel kydini
-    //     wst l map" w lobby zada (scene = null honak → st=5 fail-closed)
-    //     GameFacade.CurrentInGameUIScene() = 0x5918DB4 (static) — GetInGameUIScene()
-    //     UIInGameScene.m_CSMatchPhase @ 0xD18
     void *scene = GetInGameUIScene();
     if (!scene)
     {
@@ -990,102 +1225,60 @@ void RunFlyV2()
     }
     uint32_t phase = *(uint32_t *)((uintptr_t)scene + oxo("0xD18"));
     flyZPhase = (int)phase;
-    if (phase != 2) // Waiting/Prepare: spawn island, tayara, dive → ma kaytsenna TPs
+    if (phase != 2) // Waiting/Prepare/Post: reset auto-sky hover so next round buy phase is on the ground
     {
         flyZSt = 6;
+        flyTPDone = false;
+        if (g_skyActivatedByAuto)
+        {
+            Vars.Flyingtest = false;
+            g_skyActivatedByAuto = false;
+        }
         return;
     }
 
-    // >>> BLAST WAHD DIRECT (user: "fixi l'sky teleport... brito kima gelt
-    //     lik... ydini wast l map l'amnina" + answered "Blast wahd direct +
-    //     bla snap-back"): 3la dor FlyV2 → teleport WA7D instant f wast
-    //     l'zone l'amna (f l'jouj), bla rise-then-drop (2 jumps = glitch),
-    //     w ba3dha ghir free fly — bla y-rddekni automatic (snap-back TM7).
-    //     zone null/ghda2a → settle f blasti (fail-closed, st=2/3/4).
-    //     chain dump-verified (iOS dump.cs):
-    //       match(JMAGGLCNGIG) + 0x210 = SafeZone OBCJNEDKDOC
-    //       SafeZone + 0xB8          = ZoneDefinition BNINENNKABI
-    //       ZoneDefinition + 0x14    = OuterCenter (Vector3), +0x20 = OuterRadius
-    if (!flyTPDone) // BLAST WAHD — teleport instant l'wast l'zone (st=1)
+    float alt = (Vars.flyhei >= 20.0f) ? Vars.flyhei : 300.0f;
+
+    // One-shot high-altitude teleport directly to the CURRENT ROUND center (SafeZone / ZoneGather / RoundAnchor)
+    if (!flyTPDone || g_skyTpNextDropZoneGather)
     {
-        void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
-        void *zoneDef = safeZone ? *(void **)((uintptr_t)safeZone + oxo("0xB8")) : nullptr;
-        Vector3 target;
-        float anchorY;
-        if (zoneDef)
-        {
-            Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
-            float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
-            flyZR = zoneR;
-            if (zoneR >= 10.0f)
-            {
-                target.x = zoneC.x;
-                target.y = zoneC.y + Vars.flyhei;
-                target.z = zoneC.z;
-                anchorY = zoneC.y; // hover base = ground dyal l'zone
-                flyZSt = 1;
-            }
-            else
-            {
-                flyZSt = 4;
-                target.x = pos.x;
-                target.y = pos.y + Vars.flyhei;
-                target.z = pos.z;
-                anchorY = pos.y;
-            }
-        }
-        else
-        {
-            flyZSt = safeZone ? 3 : 2;
-            target.x = pos.x;
-            target.y = pos.y + Vars.flyhei;
-            target.z = pos.z;
-            anchorY = pos.y;
-        }
-        Transform_SetPosition(tf, target); // BLAST WAHD — nafs l'wa7d, bla 2 jumps
-        // METHOD L9DIMA anchor: hover base = l'blasa li wesselt lih
-        // (machi pos+flyhei KOLA FRAME = +300/frame = ROCKET "kytala3ni")
+        g_skyTpNextDropZoneGather = false;
+        Vector3 zoneGround = pos;
+        flyZSt = ResolveCurrentRoundGroundCenter(match, localPlayer, pos, zoneGround);
+
+        Vector3 target(zoneGround.x, zoneGround.y + alt, zoneGround.z);
+        TeleportPlayerReal(localPlayer, tf, target);
+
         FlyalturaEXposeX = target.x;
-        FlyalturaEXposeY = anchorY;
+        FlyalturaEXposeY = zoneGround.y;
         FlyalturaEXposeZ = target.z;
         FlyalturaEXpose = localPlayer;
         flyTPDone = true;
-        return; // ba3dha: STEP 3 free fly (bla snap-back — "ma bghit auto")
+        return;
     }
 
-    // >>> TELEMETRY ONLY — kay-update st/r dyal l'panel kola frame w ma
-    //     y-9elleb 3la l'position (snap-back TM7 — user: "ma bghit auto")
+    // Update telemetry radius
     {
         void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
         void *zoneDef = safeZone ? *(void **)((uintptr_t)safeZone + oxo("0xB8")) : nullptr;
         if (zoneDef)
-        {
             flyZR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
-            flyZSt = (flyZR >= 10.0f) ? 1 : 4;
-        }
-        else
-        {
-            flyZSt = safeZone ? 3 : 2;
-        }
     }
 
-    // >>> STEP 3 — METHOD L9DIMA (classic fly): pin ghir Y = exposeY + flyhei,
-    //     X/Z = pos dyalek daba = FREE — kaymchi 7er f sma, w l'slider
-    //     Fly Height (0-1000) = y-tali3 / y-red 3la l'map lli la3bin fiha
+    // Hover loop: keep altitude locked in the sky while allowing free horizontal movement/look
     if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeY == 0.0f && FlyalturaEXposeZ == 0.0f) ||
         FlyalturaEXpose == nullptr)
     {
-        if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeZ == 0.0f) ||
-            FlyalturaEXpose == nullptr)
-        {
-            FlyalturaEXposeX = pos.x;
-            FlyalturaEXposeZ = pos.z;
-            FlyalturaEXpose = localPlayer;
-        }
-        FlyalturaEXposeY = pos.y;
+        Vector3 zoneGround = pos;
+        ResolveCurrentRoundGroundCenter(match, localPlayer, pos, zoneGround);
+        FlyalturaEXposeX = zoneGround.x;
+        FlyalturaEXposeY = zoneGround.y;
+        FlyalturaEXposeZ = zoneGround.z;
+        FlyalturaEXpose = localPlayer;
     }
 
-    Transform_SetPosition(tf, Vector3(pos.x, FlyalturaEXposeY + Vars.flyhei, pos.z));
+    ZeroPhysXFallVelocity(localPlayer);
+    Transform_SetPosition(tf, Vector3(pos.x, FlyalturaEXposeY + alt, pos.z));
 }
 
 // ---- closest alive enemy (used by Telekill) ----
@@ -2552,16 +2745,122 @@ void RunResetGuest()
 // (430e8d2) — the pin re-asserts the position every frame anyway.
 
 // shared +7 m pin (Tele Mark): hold the arrival spot for
-// 500 ms (PLAIN Transform_SetPosition, NO spoof — crash fix) so clamp /
-// knockback cannot eat the 7 m, then release -> the game drops us ON the mark
+// 350-500 ms (PLAIN Transform_SetPosition, NO spoof — crash fix) so clamp /
+// knockback cannot eat the 7 m, then release -> the game drops us ON the mark/rwida
 // (user: "ay blas n teleporta liha khaso ytipini fou9ha b 7 m").
 static bool g_tpPin = false;
 static Vector3 g_tpPinPos;
 static std::chrono::steady_clock::time_point g_tpPinStart;
 
-// ---- TeleportToMark (Elite ExecuteTeleMark sequence) ------------------------
-// hop +50 then arrive exactly +7 m above the target (mark), HOLD 500 ms with
-// the plain pin, then release -> drop onto the mark. NO glide spoof (crash fix).
+// ---- AUTO SKY TP CHAIN (Ported from Android BD_HACKER.cpp [5] & [6] to iOS) ----
+static bool s_teleMarkChainPending = false;
+static bool s_teleMarkChainSkyTpPending = false;
+static bool s_teleMarkChainWithSkyTp = false;
+static bool s_teleMarkChainHasMark = false;
+static Vector3 s_chainMarkPos = {0.0f, 0.0f, 0.0f};
+static float s_rwidaMinY = 999999.0f;
+static std::chrono::steady_clock::time_point s_teleMarkChainStart;
+static bool s_skyTpFiredForRound = false;
+static bool s_sawPrepareCountdown = false;
+static bool s_lastAutoSkyToggle = false;
+
+static void ArmTeleportMarkChain(bool withSkyTp, Vector3 markPos, bool hasMark)
+{
+    s_teleMarkChainPending = true;
+    s_teleMarkChainSkyTpPending = false;
+    s_teleMarkChainWithSkyTp = withSkyTp;
+    s_teleMarkChainHasMark = hasMark;
+    s_chainMarkPos = markPos;
+    s_rwidaMinY = markPos.y + 7.0f;
+    s_teleMarkChainStart = std::chrono::steady_clock::now();
+}
+
+static void PollTeleportMarkChain()
+{
+    if (!s_teleMarkChainPending && !s_teleMarkChainSkyTpPending)
+        return;
+
+    long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - s_teleMarkChainStart)
+                              .count();
+
+    if (s_teleMarkChainPending && !s_teleMarkChainSkyTpPending)
+    {
+        // Always disable Speed Timer after 300ms so PhysX & tire bounce run at normal speed
+        if (elapsedMs >= 300 && Vars.StopTime)
+        {
+            Vars.StopTime = false;
+        }
+
+        if (!s_teleMarkChainWithSkyTp)
+        {
+            if (elapsedMs >= 300)
+                s_teleMarkChainPending = false;
+            return;
+        }
+
+        // If no mark (direct SafeZone Auto Sky), wait 300ms then fire Sky TP
+        if (!s_teleMarkChainHasMark)
+        {
+            if (elapsedMs >= 300)
+            {
+                s_teleMarkChainPending = false;
+                s_teleMarkChainSkyTpPending = true;
+            }
+            return;
+        }
+
+        // With a mark (rwida in another map):
+        // 1) Wait for the 350ms +7m pin to release so the player drops onto the rwida
+        if (g_tpPin)
+            return;
+
+        // 2) Watch player Y as they fall onto the rwida and bounce upward
+        void *match = game_sdk->Curent_Match();
+        void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
+        void *tf = local ? game_sdk->Component_GetTransform(local) : nullptr;
+        bool bouncedOnRwida = false;
+        if (tf)
+        {
+            Vector3 curPos = game_sdk->get_position(tf);
+            if (curPos != Vector3::zero())
+            {
+                if (curPos.y < s_rwidaMinY)
+                    s_rwidaMinY = curPos.y;
+                // Tire launch detected: player dropped near the rwida and is now rising upward!
+                if (s_rwidaMinY <= s_chainMarkPos.y + 6.0f && curPos.y >= s_rwidaMinY + 0.75f)
+                {
+                    bouncedOnRwida = true;
+                }
+            }
+        }
+
+        // Trigger return to current round as soon as rwida bounce starts OR after 750ms total
+        if (bouncedOnRwida || elapsedMs >= 750)
+        {
+            s_teleMarkChainPending = false;
+            s_teleMarkChainSkyTpPending = true;
+        }
+        return;
+    }
+
+    if (s_teleMarkChainSkyTpPending)
+    {
+        if (Vars.StopTime)
+            Vars.StopTime = false;
+        s_teleMarkChainSkyTpPending = false;
+        g_tpPin = false;
+        g_skyTpNextDropZoneGather = true;
+        flyTPDone = false;
+        g_skyActivatedByAuto = true;
+        Vars.Flyingtest = true; // Activates RunFlyV2 -> teleports back to current round safe-zone center in sky!
+    }
+}
+
+// ---- TeleportToMark (Elite ExecuteTeleMark sequence + Auto Sky rwida chain) ----
+// hop +50 then arrive +7 m above the target (mark/rwida), HOLD 350-500 ms with
+// the plain pin, then release -> drop onto the rwida. When AutoSky is ON, arms the
+// return chain so after hitting the rwida in another map it brings you back to the current round!
 static bool TeleportToMark(Vector3 target)
 {
     void *match = game_sdk->Curent_Match();
@@ -2576,44 +2875,85 @@ static bool TeleportToMark(Vector3 target)
     Vector3 pos = game_sdk->get_position(tf);
     if (pos == Vector3::zero())
         return false;
+
+    // Save current round ground position before teleporting away to a rwida in another map
+    if (Vector3::Distance(pos, target) > 35.0f || !g_hasRoundAnchor)
+    {
+        g_roundAnchorPos = pos;
+        g_hasRoundAnchor = true;
+    }
+
+    // If we were hovering in the sky, pause sky hover while visiting the rwida
+    if (Vars.AutoSky && Vars.Flyingtest)
+    {
+        Vars.Flyingtest = false;
+        flyTPDone = false;
+    }
+
     Vector3 up = pos;
     up.y += 50.0f;
-    Transform_SetPosition(tf, up); // Elite: hop first (anti ground-clamp)
+    TeleportPlayerReal(local, tf, up); // hop first (anti ground-clamp)
     Vector3 dst = target;
     dst.y += 7.0f;
-    Transform_SetPosition(tf, dst);
-    g_tpPin = true; // hold +7 m for 500 ms, then drop onto the mark
+    TeleportPlayerReal(local, tf, dst);
+    g_tpPin = true;
     g_tpPinPos = dst;
     g_tpPinStart = std::chrono::steady_clock::now();
+
+    if (Vars.AutoSky)
+    {
+        ArmTeleportMarkChain(true, target, true);
+    }
     return true;
 }
 
-// ---- RunMarkTP: Tele Mark (manual one-shot) + Auto Mark (Fight gate) --------
-// Tele Mark: check -> one TP to my map mark; no mark -> auto-uncheck (Elite
-// auto-clears too).  Auto Mark: ECSMatchPhase == 2 once per round -> TP to the
-// mark + pin 1.5 s (Elite AutoEnableTPOnPhase2 + ExecuteGliderMarkTP 1500 ms).
-// g_markDbg bits: 1 = tele done / 2 = auto fired / 4 = pin active.
+// ---- RunMarkTP: Tele Mark + Auto Mark + Auto Sky (CS 00:00 & Phase 2) --------
 static bool g_tmDone = false;
 static bool g_amFired = false;
 static bool g_amPin = false;
-static Vector3 g_amTarget; // plain static (zero-init) - ma ndirch dynamic init f load time
+static Vector3 g_amTarget;
 static std::chrono::steady_clock::time_point g_amStart;
 static int g_markDbg = 0;
+
+static bool IsCSCountdownZeroZero(void *scene, uint32_t phase)
+{
+    if (!scene || (uintptr_t)scene <= 0x100000000ULL)
+        return false;
+    if (phase == 2)
+        return true;
+    // Check UIInGameScene.m_CSMatchInfoInfoCtrl (+0x798) -> min (+0xC0), sec (+0xC4), mSeconds (+0xB0)
+    void *csCtrl = *(void **)((uintptr_t)scene + oxo("0x798"));
+    if (csCtrl && (uintptr_t)csCtrl > 0x100000000ULL && ((uintptr_t)csCtrl >> 48) == 0)
+    {
+        uint32_t curMin = *(uint32_t *)((uintptr_t)csCtrl + oxo("0xC0"));
+        uint32_t curSec = *(uint32_t *)((uintptr_t)csCtrl + oxo("0xC4"));
+        int32_t mSec = *(int32_t *)((uintptr_t)csCtrl + oxo("0xB0"));
+        if (phase == 1 && (curMin > 0 || curSec > 0 || mSec > 0))
+            s_sawPrepareCountdown = true;
+        if (s_sawPrepareCountdown && curMin == 0 && curSec == 0 && mSec == 0)
+            return true;
+    }
+    return false;
+}
+
 void RunMarkTP()
 {
     g_markDbg = 0;
 
-    // shared +7 m pin: hold the TP arrival (Tele Mark) for
-    // 500 ms with PLAIN position sets (NO glide spoof — crash fix), then
-    // release -> normal physics drop us ON the mark
+    // Poll the Auto Sky chain every frame
+    PollTeleportMarkChain();
+
+    // shared +7 m pin: hold the TP arrival (Tele Mark / Auto Sky rwida drop) for
+    // 350 ms (when AutoSky is ON) or 500 ms (normal Tele Mark), then release onto the rwida
     if (g_tpPin)
     {
+        long long pinLimitMs = Vars.AutoSky ? 350 : 500;
         long long tpMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - g_tpPinStart)
                              .count();
-        if (tpMs >= 500)
+        if (tpMs >= pinLimitMs)
         {
-            g_tpPin = false; // pin off -> fall the last 7 m
+            g_tpPin = false; // pin off -> fall the last 7 m onto the rwida!
         }
         else
         {
@@ -2625,7 +2965,7 @@ void RunMarkTP()
         }
     }
 
-    // ---- Tele Mark (Elite ExecuteTeleMark, one-shot per toggle) ----
+    // ---- Tele Mark (manual one-shot per toggle; auto-resets switch so you can tap it again anytime) ----
     if (!Vars.TeleMark)
     {
         g_tmDone = false;
@@ -2634,28 +2974,127 @@ void RunMarkTP()
     {
         Vector3 mark = MarkedLoc();
         if (mark == Vector3::zero())
+        {
             Vars.TeleMark = false; // no mark on the map -> uncheck (fail-closed)
+        }
         else if (TeleportToMark(mark))
+        {
             g_tmDone = true;
+            if (Vars.AutoSky)
+                Vars.TeleMark = false; // auto-uncheck after arming rwida -> sky return chain
+        }
     }
     if (g_tmDone)
         g_markDbg |= 1;
 
-    // ---- Auto Mark (Elite AutoEnableTPOnPhase2) ----
+    // ---- Round state & Prepare-phase anchor tracking ----
+    void *scene = GetInGameUIScene();
+    uint32_t phase = (scene && (uintptr_t)scene > 0x100000000ULL)
+                         ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18"))
+                         : 0;
+
+    if (phase != 2)
+    {
+        // In Prepare/Buy phase (phase == 1), continuously record our current round spawn position
+        if (phase == 1 && !g_tpPin && !s_teleMarkChainPending)
+        {
+            void *match = game_sdk->Curent_Match();
+            void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
+            void *tf = local ? game_sdk->Component_GetTransform(local) : nullptr;
+            if (tf)
+            {
+                Vector3 p = game_sdk->get_position(tf);
+                if (p != Vector3::zero())
+                {
+                    g_roundAnchorPos = p;
+                    g_hasRoundAnchor = true;
+                }
+            }
+        }
+        g_amFired = false;
+        g_amPin = false;
+        s_skyTpFiredForRound = false;
+        s_teleMarkChainPending = false;
+        s_teleMarkChainSkyTpPending = false;
+        if (g_skyActivatedByAuto)
+        {
+            Vars.Flyingtest = false;
+            g_skyActivatedByAuto = false;
+        }
+    }
+
+    // ---- Handle Auto Sky manual toggle ON/OFF during a round ----
+    if (!Vars.AutoSky)
+    {
+        if (s_lastAutoSkyToggle && g_skyActivatedByAuto)
+        {
+            Vars.Flyingtest = false;
+            g_skyActivatedByAuto = false;
+        }
+        s_lastAutoSkyToggle = false;
+        s_skyTpFiredForRound = false;
+    }
+    else if (!s_lastAutoSkyToggle)
+    {
+        s_lastAutoSkyToggle = true;
+        // If toggled ON mid-round (phase == 2), allow it to fire immediately for this round
+        s_skyTpFiredForRound = false;
+    }
+
+    bool readyToFireRound = (phase == 2) || IsCSCountdownZeroZero(scene, phase);
+
+    // ---- AUTO SKY TP (00:00 countdown / Phase 2 trigger) ----
+    if (Vars.AutoSky && readyToFireRound && !s_skyTpFiredForRound)
+    {
+        void *match = game_sdk->Curent_Match();
+        void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
+        void *tf = local ? game_sdk->Component_GetTransform(local) : nullptr;
+        if (local && tf && game_sdk->get_MaxHP(local) > 0 && game_sdk->GetHp(local) > 0)
+        {
+            Vector3 curPos = game_sdk->get_position(tf);
+            Vector3 mark = MarkedLoc();
+            if (mark != Vector3::zero())
+            {
+                // If player is NOT already at the rwida mark, teleport to the rwida first -> bounce -> return to current round in sky!
+                if (Vector3::Distance(curPos, mark) > 25.0f)
+                {
+                    if (TeleportToMark(mark))
+                    {
+                        s_skyTpFiredForRound = true;
+                        s_sawPrepareCountdown = false;
+                        g_amFired = true; // prevent AutoMark from gluing at +1.5m during rwida bounce
+                    }
+                }
+                else
+                {
+                    // Already at the rwida -> return immediately to the current round in the sky!
+                    s_skyTpFiredForRound = true;
+                    s_sawPrepareCountdown = false;
+                    g_skyTpNextDropZoneGather = true;
+                    flyTPDone = false;
+                    g_skyActivatedByAuto = true;
+                    Vars.Flyingtest = true;
+                }
+            }
+            else
+            {
+                // No map mark placed: fire Auto Sky straight to the current round's safe-zone center!
+                s_skyTpFiredForRound = true;
+                s_sawPrepareCountdown = false;
+                ArmTeleportMarkChain(true, Vector3::zero(), false);
+            }
+        }
+    }
+
+    // ---- Auto Mark (when AutoSky is OFF, classic 1500ms pin on mark) ----
     if (!Vars.AutoMark)
     {
         g_amFired = false;
         g_amPin = false;
         return;
     }
-    void *scene = GetInGameUIScene();
-    uint32_t phase = scene ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18")) : 0;
     if (phase != 2)
-    {
-        g_amFired = false; // new round -> re-arm (Elite resets at phase != 2)
-        g_amPin = false;
         return;
-    }
     if (!g_amFired)
     {
         Vector3 mark = MarkedLoc();
@@ -2663,19 +3102,20 @@ void RunMarkTP()
         {
             g_amFired = true;
             g_amTarget = mark;
-            g_amPin = true;
+            // Only glue at +1.5m if AutoSky is OFF (when AutoSky is ON, we want the player to bounce on the rwida and return to the round in the sky!)
+            g_amPin = !Vars.AutoSky;
             g_amStart = std::chrono::steady_clock::now();
         }
-        return; // waiting for the mark - retried every frame
+        return;
     }
     g_markDbg |= 2;
-    if (g_amPin)
+    if (g_amPin && !Vars.AutoSky)
     {
         long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - g_amStart)
                            .count();
         if (ms >= 1500)
-            g_amPin = false; // Elite: 1500 ms then release (land on the mark)
+            g_amPin = false;
         else
         {
             void *match = game_sdk->Curent_Match();
@@ -2685,7 +3125,7 @@ void RunMarkTP()
             {
                 Vector3 pin = g_amTarget;
                 pin.y += 1.5f;
-                Transform_SetPosition(tf, pin); // glued to the mark (anti-knockback)
+                Transform_SetPosition(tf, pin);
             }
             g_markDbg |= 4;
         }
@@ -3105,7 +3545,8 @@ void StartAimkill() {
         Vector3 eh, origin;
         if (!IsValidTarget(local, e, firePos, localHead, &eh, &origin)) continue;
         float d = Vector3::Distance(origin, eh);
-        if (d < 0.0005f || d > range || d > cfg.MaxRange) continue;
+        // RIOSSM 0x000a1fe0: compare against cfg.MaxRange (6000.f) so Sky TP (+300m..400m) kills with any weapon!
+        if (d < 0.0005f || (!Vars.Flyingtest && !Vars.AutoSky && d > range) || d > cfg.MaxRange) continue;
         Vector3 dir{0,0,0};
         if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - origin;
                            dir = {v.x*inv, v.y*inv, v.z*inv}; }

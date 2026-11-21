@@ -76,8 +76,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_UNDERGROUND = 11, FLTBTN_AUTOUNDER = 12, FLTBTN_COUNT = 13 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_UNDERGROUND = 11, FLTBTN_AUTOUNDER = 12, FLTBTN_AUTOSKY = 13, FLTBTN_COUNT = 14 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -129,6 +129,7 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(0.88f, 0.96f, 1.00f, 1.00f), // GHOST    - byd glaci (ice)
     ImVec4(1.00f, 0.38f, 0.15f, 1.00f), // UNDERGROUND - lava orange
     ImVec4(0.00f, 0.92f, 0.72f, 1.00f), // AUTOUNDER   - neon mint
+    ImVec4(0.18f, 0.85f, 1.00f, 1.00f), // AUTOSKY     - neon sky blue
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -158,7 +159,7 @@ struct CicadaSaveData {
     float fovLineColor[4];
     // Features & Floating Buttons
     bool fltShow[FLTBTN_COUNT];
-    bool telekill, aimKillSend, fly, flyingtest, flyOp, flyJump, stopTime, teleMark, autoMark, downKillV2, ghost, underGround, autoUnder, resetGuest;
+    bool telekill, aimKillSend, fly, flyingtest, flyOp, flyJump, stopTime, teleMark, autoMark, downKillV2, ghost, underGround, autoUnder, autoSky, resetGuest;
     float flySpeed, flyhei, khoangcach, ugDepth;
     // Theme
     float panelCol[4];
@@ -172,13 +173,13 @@ struct CicadaSaveData {
 
 static CicadaSaveData g_lastSavedSnap = {};
 static bool g_saveSnapInited = false;
-static NSString *const kCicadaSaveKey = @"CicadaAutoSave_v3";
-static NSString *const kCicadaAutoSaveFlagKey = @"CicadaAutoSaveEnabled_v3";
+static NSString *const kCicadaSaveKey = @"CicadaAutoSave_v4";
+static NSString *const kCicadaAutoSaveFlagKey = @"CicadaAutoSaveEnabled_v4";
 
 static void CaptureSaveSnapshot(CicadaSaveData *d)
 {
     memset(d, 0, sizeof(CicadaSaveData));
-    d->magic = 0xC1CADA03;
+    d->magic = 0xC1CADA04;
     d->autoSave = g_autoSave;
     d->espEnable = Vars.Enable;
     d->lines = Vars.lines;
@@ -217,6 +218,7 @@ static void CaptureSaveSnapshot(CicadaSaveData *d)
     d->ghost = Vars.Ghost;
     d->underGround = Vars.UnderGround;
     d->autoUnder = Vars.AutoUnder;
+    d->autoSky = Vars.AutoSky;
     d->resetGuest = Vars.ResetGuest;
     d->flySpeed = Vars.flySpeed;
     d->flyhei = Vars.flyhei;
@@ -265,7 +267,7 @@ static void LoadAutoSaveConfig(void)
         return;
     }
     const CicadaSaveData *d = (const CicadaSaveData *)[blob bytes];
-    if (d->magic != 0xC1CADA03) {
+    if (d->magic != 0xC1CADA04) {
         CaptureSaveSnapshot(&g_lastSavedSnap);
         g_saveSnapInited = true;
         return;
@@ -308,6 +310,7 @@ static void LoadAutoSaveConfig(void)
     Vars.Ghost = d->ghost;
     Vars.UnderGround = d->underGround;
     Vars.AutoUnder = d->autoUnder;
+    Vars.AutoSky = d->autoSky;
     Vars.ResetGuest = false; // never auto-reset guest on launch
     Vars.flySpeed = d->flySpeed;
     Vars.flyhei = d->flyhei;
@@ -858,6 +861,9 @@ ImFont* Urbanist;
                 case FLTBTN_AUTOUNDER:
                     DrawFloatingButton(i, oxorany("Auto Under"), &Vars.AutoUnder);
                     break;
+                case FLTBTN_AUTOSKY:
+                    DrawFloatingButton(i, oxorany("Auto Sky"), &Vars.AutoSky);
+                    break;
                 }
             }
      ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
@@ -974,6 +980,9 @@ ImFont* Urbanist;
                         DrawSection(oxorany("MOVEMENT & FLIGHT"));
                         if (ImGui::Checkbox(oxorany("Button FLY V2"), &Vars.Flyingtest))
                             gFltShow[FLTBTN_FLYV2] = Vars.Flyingtest; // panel = sataf dyal l'button f écran
+                        ImGui::SameLine();
+                        if (ImGui::Checkbox(oxorany("Button Auto Sky"), &Vars.AutoSky))
+                            gFltShow[FLTBTN_AUTOSKY] = Vars.AutoSky;
                         ImGui::SliderFloat(oxorany("Fly Height"), &Vars.flyhei, 0.0f, 1000.0f, "%.f");
                         ImGui::TextDisabled("Zone: %d  |  r: %.0f  |  phase: %d", flyZSt, flyZR, flyZPhase);
                         ImGui::Spacing();
@@ -1009,6 +1018,8 @@ ImFont* Urbanist;
                             if (ImGui::Checkbox(oxorany("Under Ground"), &Vars.UnderGround)) gFltShow[FLTBTN_UNDERGROUND] = Vars.UnderGround;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Auto Under"), &Vars.AutoUnder)) gFltShow[FLTBTN_AUTOUNDER] = Vars.AutoUnder;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Auto Sky"), &Vars.AutoSky)) gFltShow[FLTBTN_AUTOSKY] = Vars.AutoSky;
                         }
                         ImGui::EndTable();
                         ImGui::SliderFloat(oxorany("Under Depth"), &Vars.UgDepth, 1.0f, 6.0f, "%.1f m");
@@ -1096,6 +1107,7 @@ ImFont* Urbanist;
             aimbot();
             game_sdk->init();
             // ported features — after init() so every function pointer is set
+            RunMarkTP(); // runs BEFORE RunFlyV2 so Auto Sky chain triggers Sky TP in the same frame
             RunFly();
             RunFlyV2();
             RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
@@ -1104,7 +1116,6 @@ ImFont* Urbanist;
             RunDownKillV2();
             RunGhost();
             RunUnderGround();
-            RunMarkTP();
             RunTelekill();
             StartAimkill();
             RunResetGuest(); // Reset Guest config (login/lobby — runs always)
