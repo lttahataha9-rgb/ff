@@ -2403,7 +2403,7 @@ void RunUnderGround()
         for (int i = 0; i < 5; i++)
             Transform_SetPosition(rt, ug);
 
-    // Keep camera at surface level so you can see & shoot normally above ground
+    // Keep camera at surface level so view never sinks underground
     void *cam = *(void **)((uintptr_t)local + oxo("0x3E8"));
     if (cam)
     {
@@ -2412,6 +2412,17 @@ void RunUnderGround()
         {
             cp.y = g_ugGroundY + g_ugCamOff;
             Transform_SetPosition(cam, cp);
+        }
+    }
+    void *mainCamObj = game_sdk->get_camera ? game_sdk->get_camera() : nullptr;
+    void *mainCamTf = mainCamObj ? game_sdk->Component_GetTransform(mainCamObj) : nullptr;
+    if (mainCamTf)
+    {
+        Vector3 mcp = game_sdk->get_position(mainCamTf);
+        if (mcp != Vector3::zero() && mcp.y < g_ugGroundY + 0.5f)
+        {
+            mcp.y = g_ugGroundY + g_ugCamOff;
+            Transform_SetPosition(mainCamTf, mcp);
         }
     }
 }
@@ -2924,8 +2935,8 @@ struct AimKill360Cfg {
 static AimKill360Cfg cfg{true, 32, 3, 1.f, 6000.f, 0.f};
 static float g_nextFireTime = 0.f;
 
-// ---- target filtering (yours + V2 SDK checks, raycast from localHead so TP sees all at once) ----
-static bool IsValidTarget(void *local, void *e, Vector3 localHead, Vector3 *outHead) {
+// ---- target filtering (raycasts from surface-level firePos so Underground + AimKill works) ----
+static bool IsValidTarget(void *local, void *e, Vector3 firePos, Vector3 *outHead) {
     if (!e || e == local) return false;
     if (!game_sdk->Component_GetTransform(e)) return false;
     if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(e)) return false;
@@ -2935,8 +2946,8 @@ static bool IsValidTarget(void *local, void *e, Vector3 localHead, Vector3 *outH
     if (game_sdk->get_isVisible && !game_sdk->get_isVisible(e)) return false;
     if (!AikHeadPos(e, outHead)) return false;
     void *hitObj = nullptr;
-    bool headClear = !tanghinh::Physics_Raycast(localHead, *outHead, 12, &hitObj);
-    if (!headClear && !tanghinh::isVisible(e)) return false;
+    bool headClear = !tanghinh::Physics_Raycast(firePos, *outHead, 12, &hitObj);
+    if (!headClear && (g_ugRun || g_ghRun || !tanghinh::isVisible(e))) return false;
     return true;
 }
 
@@ -3102,11 +3113,16 @@ void StartAimkill() {
         Vector3 cp = game_sdk->get_position(mainCamTf);
         if (cp != Vector3::zero()) firePos = cp;
     }
+    // If Underground or Ghost is active, keep firePos at surface level so raycast & server hitreg succeed
+    if (g_ugRun && firePos.y < g_ugGroundY + 1.0f)
+        firePos.y = g_ugGroundY + g_ugCamOff;
+    else if (g_ghRun && firePos.y < g_ghGroundY + 1.0f)
+        firePos.y = g_ghGroundY + g_ghCamOff;
 
     std::vector<TargetCtx> targets;
     for (void *e : GetPlayerList360(match)) {
         Vector3 eh;
-        if (!IsValidTarget(local, e, localHead, &eh)) continue;
+        if (!IsValidTarget(local, e, firePos, &eh)) continue;
         float d = Vector3::Distance(firePos, eh);
         if (d < 0.0005f || d > range || d > cfg.MaxRange) continue;
         Vector3 dir{0,0,0};
