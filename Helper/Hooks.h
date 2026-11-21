@@ -2670,17 +2670,17 @@ static void InitApi() {
 // ---- 360° config (from V2 loop) ----
 struct AimKill360Cfg {
     bool  Enable;
-    int   MaxTargets;   // 1..8   (clamped like V2)
-    int   Burst;        // 1..10  (clamped like V2)
+    int   MaxTargets;   // all visible targets in range
+    int   Burst;        // shots per target per frame
     float FovRatio;     // 0..1   -- 0 or 1 => full 360 (distance-only)
     float MaxRange;     // default 6000.f
     float Cooldown;     // seconds; 0 = every frame
 };
-static AimKill360Cfg cfg{true, 8, 3, 1.f, 6000.f, 0.f};
+static AimKill360Cfg cfg{true, 32, 2, 1.f, 6000.f, 0.f};
 static float g_nextFireTime = 0.f;
 
-// ---- target filtering (yours + V2 SDK checks) ----
-static bool IsValidTarget(void *local, void *e) {
+// ---- target filtering (yours + V2 SDK checks, raycast from localHead so TP sees all at once) ----
+static bool IsValidTarget(void *local, void *e, Vector3 localHead, Vector3 *outHead) {
     if (!e || e == local) return false;
     if (!game_sdk->Component_GetTransform(e)) return false;
     if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(e)) return false;
@@ -2688,7 +2688,10 @@ static bool IsValidTarget(void *local, void *e) {
     if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(e)) return false;
     if (game_sdk->GetHp(e) <= 0) return false;
     if (game_sdk->get_isVisible && !game_sdk->get_isVisible(e)) return false;
-    if (!tanghinh::isVisible(e)) return false;
+    if (!AikHeadPos(e, outHead)) return false;
+    void *hitObj = nullptr;
+    bool headClear = !tanghinh::Physics_Raycast(localHead, *outHead, 12, &hitObj);
+    if (!headClear && !tanghinh::isVisible(e)) return false;
     return true;
 }
 
@@ -2714,7 +2717,7 @@ static std::vector<void *> GetPlayerList360(void *match) {
     return out;
 }
 
-// ---- send message 106 for one target (your function, unchanged core) ----
+// ---- send message 106 + 108 reset for one target so all targets register in the same frame ----
 static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
                            int weaponId, int baseDamage,
                            void *objectPool,
@@ -2726,6 +2729,9 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
     if (!headCollider) return;
     void *hitObject = api.getGameObject(headCollider);
     if (!hitObject) return;
+
+    // Reset weapon fire state (+0x5F0) BEFORE every target so CheckParams & server accept all targets at once
+    *(float *)((uintptr_t)weapon + OFF_Zexis_Weapon_Field5F0) = 0.0f;
 
     if (damageInfo) {
         *(int   *)((char *)damageInfo + OFF_Zexis_DamageInfo_HitPart)     = 1;
@@ -2754,20 +2760,28 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
         *(bool  *)(pool + OFF_Zexis_Pool_Flag71)        = true;
     }
 
+    uint32_t simTick = 0;
+    void *simTimer = api.currentSimTimer(nullptr);
+    if (simTimer) {
+        simTick = *(uint32_t *)((char *)simTimer + OFF_Zexis_SimTimer_TickCount);
+        AikStoreHitHash(weapon, t.enemy, simTick);
+    }
+
+    api.startFiring(local, weapon);
+
     void *aimingEntity = api.getAimingEntity(local, objectPool);
     void *checkParams  = api.buildCheckParams(weapon, t.enemy, headCollider, false, nullptr);
-    if (!checkParams) { aikDbgSt = 12; return; }
+    if (!checkParams) {
+        api.stopFire(local, weapon);
+        aikDbgSt = 12;
+        return;
+    }
 
     uint32_t enemyNetId = api.playerIDToUint(api.getPlayerID(t.enemy));
     api.weaponDoSomething(weapon, checkParams, enemyNetId);
 
     uint32_t localNetId = api.playerIDToUint(api.getPlayerID(local));
     uint32_t weaponField = (weaponId == 1) ? 0u : uniqueId;
-
-    uint32_t simTick = 0;
-    void *simTimer = api.currentSimTimer(nullptr);
-    if (simTimer)
-        simTick = *(uint32_t *)((char *)simTimer + OFF_Zexis_SimTimer_TickCount);
 
     auto *pkt = (message_C2S_RUDP_TakeDamage_Req_o2 *)api.createDamageReq(local);
     if (pkt) {
@@ -2790,6 +2804,11 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
         aikDbgSent++;
         aikDbgSt = 9;
     }
+    api.stopFire(local, weapon);
+    // Immediately send opcode 108 weapon-swap/reload sync + reset swap timer
+    // so the server resets the gun's fire-rate limit before the next target in this same frame
+    Send108(local, t.enemy);
+    aik.ResetSwapTime(local);
     (void)aimingEntity; (void)hitObject;
 }
 
@@ -2814,35 +2833,6 @@ void StartAimkill() {
     float now = api.realtimeSinceStartup();
     if (cfg.Cooldown > 0.f && now < g_nextFireTime) return;
 
-    // ---- 360° target acquisition: distance only, no FOV cone (V2) ----
-    Vector3 localHead;
-    if (!AikHeadPos(local, &localHead)) { aikDbgSt = 10; return; }
-
-    std::vector<TargetCtx> targets;
-    for (void *e : GetPlayerList360(match)) {
-        if (!IsValidTarget(local, e)) continue;
-        Vector3 eh;
-        if (!AikHeadPos(e, &eh)) continue;
-        float d = Vector3::Distance(localHead, eh);
-        if (d < 0.0005f || d > cfg.MaxRange) continue;
-        // optional soft FOV gate: 0.f or 1.f == full 360
-        if (cfg.FovRatio > 0.f && cfg.FovRatio < 1.f) {
-            Vector3 v = eh - localHead;
-            float planar = sqrtf(v.x*v.x + v.z*v.z);
-            if (planar > cfg.MaxRange * cfg.FovRatio) continue;
-        }
-        Vector3 dir{0,0,0};
-        if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - localHead;
-                           dir = {v.x*inv, v.y*inv, v.z*inv}; }
-        targets.push_back({e, eh, dir, d});
-    }
-    if (targets.empty()) { aikDbgSt = 4; return; }
-    aikDbgN = (int)targets.size();
-    std::sort(targets.begin(), targets.end(),
-              [](const TargetCtx &a, const TargetCtx &b){ return a.dist < b.dist; });
-    int maxTargets = std::clamp(cfg.MaxTargets, 1, 8);   // V2: top-8 closest
-    if ((int)targets.size() > maxTargets) targets.resize(maxTargets);
-
     // ---- weapon setup (once) ----
     void *weapon = api.getWeaponOnHand(local);
     if (!weapon) { aikDbgSt = 6; return; }
@@ -2852,6 +2842,29 @@ void StartAimkill() {
     if (weaponId == -1 || baseDamage == 0) { aikDbgSt = 7; return; }
     if (baseDamage < 100) baseDamage = 999;
     float range = api.getRange(weapon);
+    if (range <= 0.0f) { aikDbgSt = 8; return; }
+
+    // ---- 360° target acquisition: distance only, no FOV cone (V2) ----
+    Vector3 localHead;
+    if (!AikHeadPos(local, &localHead)) { aikDbgSt = 10; return; }
+
+    std::vector<TargetCtx> targets;
+    for (void *e : GetPlayerList360(match)) {
+        Vector3 eh;
+        if (!IsValidTarget(local, e, localHead, &eh)) continue;
+        float d = Vector3::Distance(localHead, eh);
+        if (d < 0.0005f || d > range || d > cfg.MaxRange) continue;
+        Vector3 dir{0,0,0};
+        if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - localHead;
+                           dir = {v.x*inv, v.y*inv, v.z*inv}; }
+        targets.push_back({e, eh, dir, d});
+    }
+    if (targets.empty()) { aikDbgSt = 4; return; }
+    aikDbgN = (int)targets.size();
+    std::sort(targets.begin(), targets.end(),
+              [](const TargetCtx &a, const TargetCtx &b){ return a.dist < b.dist; });
+    int maxTargets = std::clamp(cfg.MaxTargets, 1, 32);
+    if ((int)targets.size() > maxTargets) targets.resize(maxTargets);
 
     void *objectPool = *(void **)((uint64_t)local + OFF_Zexis_Player_ObjectPool);
     if (!objectPool) { aikDbgSt = 10; return; }
@@ -2869,17 +2882,15 @@ void StartAimkill() {
     uint32_t uniqueId = *(uint32_t *)((uintptr_t)weapon + OFF_Zexis_Weapon_UniqueNetID);
     int shots = std::clamp(cfg.Burst, 1, 10);
 
-    // ---- fire sequence: StartFiring -> message 106 x targets x burst -> StopFire ----
-    api.startFiring(local, weapon);
+    // ---- Round-robin multi-target strike: hit ALL visible enemies in the SAME frame ----
     int sent = 0;
-    for (const TargetCtx &t : targets) {
-        if (t.dist > range) { aikDbgSt = 8; continue; }
-        for (int s = 0; s < shots; ++s)
+    for (int s = 0; s < shots; ++s) {
+        for (const TargetCtx &t : targets) {
             SendTakeDamage(local, weapon, t, weaponId, baseDamage,
                            objectPool, localPlayerId, damageInfo, uniqueId, localHead);
-        ++sent;
+            ++sent;
+        }
     }
-    api.stopFire(local, weapon);
 
     if (sent && cfg.Cooldown > 0.f)
         g_nextFireTime = now + cfg.Cooldown;
