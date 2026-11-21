@@ -1538,7 +1538,8 @@ static void AikShuffleValidate(void *weapon, void *params, uint32_t seedEnc)
 
 // AimkillSendStrike — fill the local player's hit-object scratch, then build
 // and send the packet. Restores the proven-old zexisyy behaviors (st=11 fix):
-// weapon+0x5F0 reset, baseDamage from weapon+0xA8 (<100 -> 999), full
+// weapon+0x5F0 reset, baseDamage from weapon+0xA8 (<100 -> 999, then CAPPED
+// at the enemy's current HP so the strike never overkills), full
 // AimTarget pool fill (the old build only wrote 0x18/0x20 here), local
 // damage-info writes, StartFiring before CheckParams, CheckParams 2nd arg =
 // the ENEMY (NOT the GetAiming result — the old code resolved the aiming
@@ -1576,6 +1577,18 @@ static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos,
     int32_t baseDamage = *(int32_t *)((uintptr_t)weapon + 0xA8);
     if (baseDamage == 0) { aikDbgSt = 7; return false; }
     if (baseDamage < 100) baseDamage = 999;
+    // USER FIX (zexisyy source): "ila damo 200 -> t9tlo ghir b dm li ando
+    // (200); matalan 100 f dm w ana andi AWM -> khasha smnih ghir 100;
+    // mythsch liya dmg ktar". Qbel l-packet kan mchi b 999 (overkill / dmg
+    // zayed) -> daba n-capwiw 3la dm l-3douwwa l-hali:
+    //     baseDamage = min(baseDamage, GetHp(target))
+    // => 200 HP -> 200 (kill exact), 100 HP -> 100, w ma-kayn-ch dmg zayed.
+    // l-cap qbel mn kol l-istikhdam (pool 0x58 / damageInfo 0x10 / msg 0x1C)
+    // -> kolchi f nafs l-value, ma-ybqach mismatch y-tqbel detect.
+    int32_t hpNow = game_sdk->GetHp(target);
+    if (hpNow > 0 && baseDamage > hpNow)
+        baseDamage = hpNow;
+    if (baseDamage <= 0) { aikDbgSt = 7; return false; }
     uint32_t weaponID = aik.GetWeaponID(weapon);
 
     // old zexisyy: full hit-object pool fill from the enemy's AimTarget —
@@ -1661,7 +1674,7 @@ static bool AikStrike(void *local, void *weapon, void *hitInfo, Vector3 firePos,
     // attacker/hp/zero/damage|part/victim/weapon/uniq/part/tick/...
     uint32_t localId = aik.IdToU32(aik.GetPlayerID(local));
     *(uint32_t *)((uintptr_t)msg + 0x14) = enemyId;                              // NMGDAKFKJLH attacker id
-    *(uint16_t *)((uintptr_t)msg + 0x18) = (uint16_t)game_sdk->GetHp(target);    // GJCLHNBCABF hp
+    *(uint16_t *)((uintptr_t)msg + 0x18) = (uint16_t)hpNow;                      // GJCLHNBCABF hp — same value as the capped damage (no overkill)
     *(uint16_t *)((uintptr_t)msg + 0x1A) = 0;                                    // IMKLAILPLKC
     *(uint32_t *)((uintptr_t)msg + 0x1C) = (uint32_t)baseDamage | (1u << 24);    // AEOHKCOACHD damage|part<<24
     *(uint32_t *)((uintptr_t)msg + 0x20) = localId;                              // ECJBNJPOPIM local id
