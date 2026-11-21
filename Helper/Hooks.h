@@ -527,7 +527,7 @@ void *GetClosestEnemyAik()
                 continue;
             if (game_sdk->GetHp(Player) <= 0)
                 continue;
-            if (!game_sdk->get_isVisible(Player) || !tanghinh::isVisible(Player))
+            if (!tanghinh::isVisible(Player))
                 continue;
             float distance = Vector3::Distance(getPosition(Player), getPosition(LocalPlayer));
             if (distance < shortestVisDistance)
@@ -1287,17 +1287,35 @@ static bool AikInit()
     return true;
 }
 
-// null-checked head position (the plain GetHeadPosition helper doesn't guard
-// a missing head transform)
+// null-checked head position — prefers HeadCollider transform (RIOSSM 0x000a1f4c..0x000a1f8c)
+// because Unity Animator can cull bone transforms when an enemy is off-screen / behind the camera (360°),
+// whereas HeadCollider's physics transform is always live in 3D space.
 static bool AikHeadPos(void *p, Vector3 *out)
 {
     if (!p)
         return false;
+    if (aik.HeadCollider)
+    {
+        void *hc = aik.HeadCollider(p);
+        if (hc)
+        {
+            void *hcTf = game_sdk->Component_GetTransform(hc);
+            if (hcTf)
+            {
+                Vector3 pos = game_sdk->get_position(hcTf);
+                if (pos != Vector3::zero())
+                {
+                    *out = pos;
+                    return true;
+                }
+            }
+        }
+    }
     void *tf = game_sdk->GetHeadPositions(p);
     if (!tf)
         return false;
     *out = game_sdk->get_position(tf);
-    return true;
+    return *out != Vector3::zero();
 }
 
 // Android IsValidGun — weapon-id blacklist (fists / throwables / vehicles)
@@ -2800,6 +2818,11 @@ static bool SmartCoverKill(void *enemy)
 // 12 no-checkParams / 13 no-damage-msg / 14 strike gate (dead/LOS/head) /
 // 15 no-TimeService.  n: 1 = target acquired.
 // s: packets sent (AikStrike ++).  c: cover (always 0, cover removed).
+// Plain 4-float HFA struct: guaranteed to pass in s0, s1, s2, s3 under ARM64 AAPCS64
+struct FFQuat {
+    float x, y, z, w;
+};
+
 // ---- resolved engine functions (cached, resolved once) ----
 struct AimkillApi {
     void *(*getWeaponOnHand)(void *);
@@ -2817,7 +2840,7 @@ struct AimkillApi {
     COW_GamePlay_IHAAMHPPLMG_o (*getPlayerID)(void *);
     uint32_t (*playerIDToUint)(COW_GamePlay_IHAAMHPPLMG_o);
     void *(*packVector3)(Vector3);
-    void *(*packQuaternion)(Quaternion);
+    void *(*packQuaternion)(FFQuat);
     float (*realtimeSinceStartup)();
     bool  (*gameFacadeSend)(uint32_t, void *, uint8_t, bool);
 };
@@ -2856,7 +2879,8 @@ static void SendRot7E0(Vector3 firePos, Vector3 enemyHead) {
     Vector3 diff = enemyHead - firePos;
     if ((diff.x * diff.x + diff.y * diff.y + diff.z * diff.z) < 0.0001f) return;
     Quaternion rot = Quaternion::LookRotation(diff, Vector3(0, 1, 0));
-    void *rotMsg = api.packQuaternion(rot);
+    FFQuat q = {rot.x, rot.y, rot.z, rot.w};
+    void *rotMsg = api.packQuaternion(q);
     if (rotMsg)
         api.gameFacadeSend(0x7E0, rotMsg, 0, false);
 }
@@ -2873,25 +2897,38 @@ struct AimKill360Cfg {
 static AimKill360Cfg cfg{true, 32, 3, 1.f, 6000.f, 0.f};
 static float g_nextFireTime = 0.f;
 
-// ---- target filtering (raycasts from surface-level firePos so Underground + AimKill works) ----
-static bool IsValidTarget(void *local, void *e, Vector3 firePos, Vector3 *outHead) {
+// ---- 360° target filtering (NO frustum/get_isVisible check so enemies behind the player are hit!) ----
+static bool IsValidTarget(void *local, void *e, Vector3 firePos, Vector3 localHead, Vector3 *outHead, Vector3 *outOrigin) {
     if (!e || e == local) return false;
     if (!game_sdk->Component_GetTransform(e)) return false;
     if (game_sdk->get_MaxHP && !game_sdk->get_MaxHP(e)) return false;
     if (game_sdk->get_isLocalTeam && game_sdk->get_isLocalTeam(e)) return false;
     if (game_sdk->get_IsDieing && game_sdk->get_IsDieing(e)) return false;
     if (game_sdk->GetHp(e) <= 0) return false;
-    if (game_sdk->get_isVisible && !game_sdk->get_isVisible(e)) return false;
+    // NOTE: Do NOT call game_sdk->get_isVisible(e) (0x563B10C)! That checks camera frustum culling
+    // and returns false whenever an enemy is behind the player (off-screen). RIOSSM never calls it.
     if (!AikHeadPos(e, outHead)) return false;
     void *hitObj = nullptr;
-    bool headClear = !tanghinh::Physics_Raycast(firePos, *outHead, 12, &hitObj);
-    if (!headClear && (g_ugRun || g_ghRun || !tanghinh::isVisible(e))) return false;
-    return true;
+    if (!tanghinh::Physics_Raycast(firePos, *outHead, 12, &hitObj)) {
+        *outOrigin = firePos;
+        return true;
+    }
+    hitObj = nullptr;
+    if (!tanghinh::Physics_Raycast(localHead, *outHead, 12, &hitObj)) {
+        *outOrigin = localHead;
+        return true;
+    }
+    if (!g_ugRun && !g_ghRun && tanghinh::isVisible(e)) {
+        *outOrigin = firePos;
+        return true;
+    }
+    return false;
 }
 
 struct TargetCtx {
     void *enemy;
     Vector3 head;
+    Vector3 fireOrigin;
     Vector3 dir;
     float dist;
 };
@@ -2937,13 +2974,14 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
     }
 
     // RIOSSM 0x000a2288: pool+0x18 = hitObject (headCollider's GameObject), pool+0x20 = headCollider
+    Vector3 origin = t.fireOrigin;
     char *pool = (char *)objectPool;
     *(void **)(pool + OFF_Zexis_Pool_HitGameObject) = hitObject;
     *(void **)(pool + OFF_Zexis_Pool_HitCollider)   = headCollider;
     *(Vector3 *)(pool + OFF_Zexis_Pool_HitLocation) = t.head;
     *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir)      = t.dir;
     *(Vector3 *)(pool + OFF_Zexis_Pool_RayDir2)     = t.dir;
-    *(Vector3 *)(pool + OFF_Zexis_Pool_StartPos)    = firePos;
+    *(Vector3 *)(pool + OFF_Zexis_Pool_StartPos)    = origin;
     *(int   *)(pool + OFF_Zexis_Pool_Damage)        = baseDamage;
     *(float *)(pool + OFF_Zexis_Pool_Distance)      = t.dist;
     *(int   *)(pool + OFF_Zexis_Pool_Flags60)       = 1;
@@ -2976,17 +3014,19 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
     pkt->WeaponUniqueID     = weaponField;
     pkt->HitBodyPart        = 1;
     pkt->TickCount          = simTick;
-    pkt->FirePos            = (message_PVector3IntPos_o *)api.packVector3(firePos);
+    pkt->FirePos            = (message_PVector3IntPos_o *)api.packVector3(origin);
     pkt->TargetPos          = (message_PVector3IntPos_o *)api.packVector3(t.head);
     pkt->ArmorRatio         = 1.f;
     pkt->ExtraFlag          = 0;
+    pkt->ForceNoHeadShot    = false;
+    pkt->IsPlayerBackArea   = true;
     pkt->BaseTime           = api.realtimeSinceStartup();
     if (!pkt->FirePos || !pkt->TargetPos) return;
 
     // RIOSSM 0x000a2390..0x000a2524 exact order:
     // StartFiring -> SendRot7E0(0x7E0) -> GetAimingEntity -> BuildCheckParams -> WeaponDoSomething -> Send(106) -> Send(108) -> StopFire
     api.startFiring(local, weapon);
-    SendRot7E0(firePos, t.head);
+    SendRot7E0(origin, t.head);
     void *aimingEntity = api.getAimingEntity(local, objectPool);
     void *checkParams  = api.buildCheckParams(weapon, t.enemy, headCollider, false, nullptr);
     if (!checkParams || *(int32_t *)((uintptr_t)checkParams + 0x18) <= 0) {
@@ -3051,22 +3091,25 @@ void StartAimkill() {
         Vector3 cp = game_sdk->get_position(mainCamTf);
         if (cp != Vector3::zero()) firePos = cp;
     }
-    // If Underground or Ghost is active, keep firePos at surface level so raycast & server hitreg succeed
-    if (g_ugRun && firePos.y < g_ugGroundY + 1.0f)
-        firePos.y = g_ugGroundY + g_ugCamOff;
-    else if (g_ghRun && firePos.y < g_ghGroundY + 1.0f)
-        firePos.y = g_ghGroundY + g_ghCamOff;
+    // If Underground or Ghost is active, keep firePos & localHead at surface level so raycast & server hitreg succeed
+    if (g_ugRun) {
+        if (firePos.y < g_ugGroundY + 1.0f) firePos.y = g_ugGroundY + g_ugCamOff;
+        if (localHead.y < g_ugGroundY + 1.0f) localHead.y = g_ugGroundY + g_ugCamOff;
+    } else if (g_ghRun) {
+        if (firePos.y < g_ghGroundY + 1.0f) firePos.y = g_ghGroundY + g_ghCamOff;
+        if (localHead.y < g_ghGroundY + 1.0f) localHead.y = g_ghGroundY + g_ghCamOff;
+    }
 
     std::vector<TargetCtx> targets;
     for (void *e : GetPlayerList360(match)) {
-        Vector3 eh;
-        if (!IsValidTarget(local, e, firePos, &eh)) continue;
-        float d = Vector3::Distance(firePos, eh);
+        Vector3 eh, origin;
+        if (!IsValidTarget(local, e, firePos, localHead, &eh, &origin)) continue;
+        float d = Vector3::Distance(origin, eh);
         if (d < 0.0005f || d > range || d > cfg.MaxRange) continue;
         Vector3 dir{0,0,0};
-        if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - firePos;
+        if (d > 0.0001f) { float inv = 1.f/d; Vector3 v = eh - origin;
                            dir = {v.x*inv, v.y*inv, v.z*inv}; }
-        targets.push_back({e, eh, dir, d});
+        targets.push_back({e, eh, origin, dir, d});
     }
     if (targets.empty()) { aikDbgSt = 4; return; }
     aikDbgN = (int)targets.size();
