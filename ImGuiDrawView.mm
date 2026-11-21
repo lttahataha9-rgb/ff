@@ -308,7 +308,7 @@ static void LoadAutoSaveConfig(void)
     Vars.Ghost = d->ghost;
     Vars.UnderGround = d->underGround;
     Vars.AutoUnder = d->autoUnder;
-    Vars.ResetGuest = d->resetGuest;
+    Vars.ResetGuest = false; // never auto-reset guest on launch
     Vars.flySpeed = d->flySpeed;
     Vars.flyhei = d->flyhei;
     Vars.khoangcach = d->khoangcach;

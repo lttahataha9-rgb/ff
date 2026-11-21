@@ -2308,32 +2308,39 @@ void RunUnderGround()
         g_ugRun = false;
         return; // Ghost owns underground position if both are enabled
     }
-
-    void *scene = GetInGameUIScene();
-    uint32_t phase = scene ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18")) : 0;
-
-    if (phase != 2)
+    if (!Vars.UnderGround && !Vars.AutoUnder && !g_ugRun)
     {
-        g_auRoundLocked = false; // re-arm Auto Under for next round
+        g_auRoundLocked = false;
+        return; // Early return: NEVER touch game pointers at startup/lobby when OFF
     }
 
-    void *m = game_sdk->Curent_Match();
+    void *m = game_sdk->Curent_Match ? game_sdk->Curent_Match() : nullptr;
     if (!m)
     {
         g_ugRun = false;
+        g_auRoundLocked = false;
         return;
     }
-    void *local = game_sdk->GetLocalPlayer(m);
-    if (!local || game_sdk->get_MaxHP(local) <= 0)
+    void *local = game_sdk->GetLocalPlayer ? game_sdk->GetLocalPlayer(m) : nullptr;
+    if (!local || !game_sdk->get_MaxHP || game_sdk->get_MaxHP(local) <= 0)
     {
         g_ugRun = false;
+        g_auRoundLocked = false;
         return;
     }
-    void *tf = game_sdk->Component_GetTransform(local);
+    void *tf = game_sdk->Component_GetTransform ? game_sdk->Component_GetTransform(local) : nullptr;
     if (!tf)
     {
         g_ugRun = false;
         return;
+    }
+
+    void *scene = GetInGameUIScene();
+    uint32_t phase = (scene && (uintptr_t)scene > 0x100000000ULL) ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18")) : 0;
+
+    if (phase != 2)
+    {
+        g_auRoundLocked = false; // re-arm Auto Under for next round
     }
 
     bool isDead = (game_sdk->get_IsDieing && game_sdk->get_IsDieing(local)) || game_sdk->GetHp(local) <= 0;
@@ -2466,118 +2473,49 @@ static Vector3 MarkedLoc()
 // delete anything ourselves (fail-closed). m_LocalConfig is re-read from
 // statics EVERY frame (if the config object is re-parsed we follow the new
 // one, never a stale pointer). Missing il2cpp exports -> status -1 (INFO tab).
-static void **g_rgTypeInfoSlot = nullptr;
-static uint32_t g_rgStaticsOff = 0xB8;
-static int g_rgState = 0; // 0 = retry, 1 = OK, -1 = failed
+static int g_rgState = 0; // 0 = ready, 1 = OK, -1 = failed
 static bool g_rgLastToggle = false;
 
 static void ExecuteDirectGuestReset()
 {
-    // Direct Garena MSDK iOS guest reset RVAs from dump.cs:
-    // GarenaMSDKMgr.get_Instance = 0x6D076E8
-    // GarenaMSDKMgr.ResetGuest   = 0x6D098F0
-    // GarenaMSDK_ResetGuest      = 0x6D14780
-    auto getMsdkInst = (void *(*)())getRealOffset(oxo("0x6D076E8"));
-    auto msdkResetGuest = (void (*)(void *))getRealOffset(oxo("0x6D098F0"));
-    auto rawResetGuest = (void (*)())getRealOffset(oxo("0x6D14780"));
-    if (getMsdkInst && msdkResetGuest) {
+    // Validate that GarenaMSDK RVAs live inside the loaded UnityFramework image
+    Dl_info goodInfo{};
+    Dl_info candInfo{};
+    void *getMsdkInstPtr = (void *)getRealOffset(oxo("0x6D076E8"));
+    void *msdkResetPtr = (void *)getRealOffset(oxo("0x6D098F0"));
+    void *rawResetPtr = (void *)getRealOffset(oxo("0x6D14780"));
+    if (!dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) || !goodInfo.dli_fbase) {
+        g_rgState = -1;
+        return;
+    }
+
+    if (getMsdkInstPtr && msdkResetPtr &&
+        dladdr(getMsdkInstPtr, &candInfo) && candInfo.dli_fbase == goodInfo.dli_fbase) {
+        auto getMsdkInst = (void *(*)())getMsdkInstPtr;
+        auto msdkResetGuest = (void (*)(void *))msdkResetPtr;
         void *inst = getMsdkInst();
         if (inst && (uintptr_t)inst > 0x100000000ULL && ((uintptr_t)inst >> 48) == 0) {
             msdkResetGuest(inst);
-        } else if (rawResetGuest) {
-            rawResetGuest();
+            g_rgState = 1;
+            return;
         }
-    } else if (rawResetGuest) {
+    }
+    if (rawResetPtr && dladdr(rawResetPtr, &candInfo) && candInfo.dli_fbase == goodInfo.dli_fbase) {
+        auto rawResetGuest = (void (*)())rawResetPtr;
         rawResetGuest();
+        g_rgState = 1;
     }
 }
 
 void RunResetGuest()
 {
-    // COW.GameConfig.get_ResetGuest() = 0x507F3A0 (dump.cs L1098448)
-    auto fnGetResetGuest = (bool (*)())getRealOffset(oxo("0x507F3A0"));
-    if (!fnGetResetGuest) {
-        g_rgState = -1;
-        return;
+    if (!Vars.ResetGuest) {
+        g_rgLastToggle = false;
+        return; // Never touch game memory at startup/logo when OFF
     }
-
-    if (g_rgState == 0)
-    {
-        Dl_info info{};
-        if (!dladdr((void *)fnGetResetGuest, &info) || !info.dli_fbase) {
-            g_rgState = -1;
-            return;
-        }
-        // Call the game's own getter once so IL2CPP runs .cctor / class init on GameConfig
-        fnGetResetGuest();
-
-        // Decode ADRP + LDR in get_ResetGuest (0x507F3A0) to locate GameConfig_TypeInfo without dlsym
-        const uint32_t *code = (const uint32_t *)fnGetResetGuest;
-        uintptr_t adrpPages[32] = {0};
-        void **foundSlot = nullptr;
-        uint32_t foundStaticsOff = 0xB8;
-
-        for (int i = 0; i < 48; ++i) {
-            uint32_t insn = code[i];
-            if ((insn & 0x9F000000) == 0x90000000) {
-                uint32_t rd = insn & 0x1F;
-                int64_t immlo = (insn >> 29) & 0x3;
-                int64_t immhi = (insn >> 5) & 0x7FFFF;
-                int64_t imm = (immhi << 2) | immlo;
-                if (imm & (1LL << 20)) imm -= (1LL << 21);
-                uintptr_t pc = (uintptr_t)(&code[i]);
-                adrpPages[rd] = (pc & ~0xFFFULL) + (uintptr_t)(imm << 12);
-            } else if ((insn & 0xFFC00000) == 0xF9400000) {
-                uint32_t rn = (insn >> 5) & 0x1F;
-                uint32_t off = ((insn >> 10) & 0xFFF) * 8;
-                if (!foundSlot && adrpPages[rn] != 0) {
-                    uintptr_t candAddr = adrpPages[rn] + off;
-                    void *candKlass = *(void **)candAddr;
-                    if (candKlass && (uintptr_t)candKlass > 0x100000000ULL && ((uintptr_t)candKlass >> 48) == 0) {
-                        foundSlot = (void **)candAddr;
-                    }
-                    adrpPages[rn] = 0;
-                } else if (off == 0x130 && i > 0) {
-                    for (int j = i - 1; j >= 0 && j >= i - 6; --j) {
-                        uint32_t prev = code[j];
-                        if ((prev & 0xFFC00000) == 0xF9400000 && (prev & 0x1F) == rn) {
-                            uint32_t stOff = ((prev >> 10) & 0xFFF) * 8;
-                            if (stOff >= 0x80 && stOff <= 0x120)
-                                foundStaticsOff = stOff;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (foundSlot) {
-            g_rgTypeInfoSlot = foundSlot;
-            g_rgStaticsOff = foundStaticsOff;
-            g_rgState = 1;
-        }
-    }
-
-    if (Vars.ResetGuest && !g_rgLastToggle) {
+    if (!g_rgLastToggle) {
+        g_rgLastToggle = true;
         ExecuteDirectGuestReset();
-    }
-    g_rgLastToggle = Vars.ResetGuest;
-
-    if (g_rgState == 1 && g_rgTypeInfoSlot) {
-        void *klass = *g_rgTypeInfoSlot;
-        if (!klass || (uintptr_t)klass < 0x100000000ULL || ((uintptr_t)klass >> 48) != 0)
-            return;
-        void *st = *(void **)((uintptr_t)klass + g_rgStaticsOff);
-        if (!st || (uintptr_t)st < 0x100000000ULL || ((uintptr_t)st >> 48) != 0)
-            return;
-        void *lc = *(void **)((uintptr_t)st + oxo("0x130")); // GameConfig.m_LocalConfig (statics +0x130)
-        if (!lc || (uintptr_t)lc < 0x100000000ULL || ((uintptr_t)lc >> 48) != 0)
-            return;
-        bool want = Vars.ResetGuest;
-        bool *f1 = (bool *)((uintptr_t)lc + oxo("0xD6")); // LocalConfig.resetGuest
-        bool *f2 = (bool *)((uintptr_t)lc + oxo("0xD7")); // LocalConfig.resetGuestBeforeLogin
-        if (*f1 != want) *f1 = want;
-        if (*f2 != want) *f2 = want;
     }
 }
 
