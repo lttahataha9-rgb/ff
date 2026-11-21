@@ -2002,9 +2002,10 @@ void RunFlyAuto(float dt)
 // 8 bytes. Gate = Vars.JuFly || Vars.FlyAuto (nfs l-flag dyalo) + lobby
 // guard (get_MaxHP <= 0) -> n-3awed l-orig. State-change ghir (ma n-mprotect-ch
 // kol frame).
-// Targets (dump.cs iOS 1.132.X), juuj li f snippet nefsso:
+// Targets (dump.cs iOS 1.132.X), juuj li f snippet nefsso + wa7ed zayd:
 //     CharacterController.get_isGrounded   0x8DF4F10   (Unity, lowercase)
 //     PhysicalCCT.get_IsGrounded           0x6469184   (COW.GamePlay, capital)
+//     Player.IsGrounded()                  0x56870BC   (COW.GamePlay, method)
 // dladdr fail-closed (nfs l-pattern dyal Transform_SetPosition) -> lazem
 // y-resolve f nafs l-image dyal Transform::get_position (0x8D6C1EC), okhra -> ghir.
 // Page size = sysconf(_SC_PAGESIZE) -> iPhone 11 (A13) = 16 KB, MA 4096.
@@ -2013,10 +2014,13 @@ void RunFlyAuto(float dt)
 #include <mach/mach.h>
 
 static const uint32_t kGndPatch[2] = {0x52800020u, 0xD65F03C0u}; // mov w0,#1 ; ret
-static void *g_gndFn[2] = {nullptr, nullptr};
-static uint32_t g_gndOrig[2] = {0u, 0u};
+static void *g_gndFn[3] = {nullptr, nullptr, nullptr};    // getter entry (yn9der ykoun `b` thunk)
+static void *g_gndAddr[3] = {nullptr, nullptr, nullptr};  // l-addr li fih ta n-patchiw
+static uint32_t g_gndOrig[3] = {0u, 0u, 0u};
 static bool g_gndTried = false;
+static int g_gndTries = 0;
 static bool g_gndOn = false;
+int g_gndPatched = 0; // 0..3 — kanchoufouh f l-panel (diagnostic)
 
 static void *GndFn(const char *offHex)
 {
@@ -2034,30 +2038,54 @@ static void *GndFn(const char *offHex)
         return cand;
     return nullptr;
 }
+// IL2CPP n-y9der y-sayt b thunk `b impl` (4 bytes). Substrate kaysayt l-ENTRY
+// (ghir y-rje3 true qbel ma y-tdar l-orig) — hna n-bddlo l-entry nefsso bach
+// ma-n-seddch 4 bytes dyal l-fonction li mb3dha -> n-decodiw l-branch w
+// n-patchiw l-impl dyalo (nafs l-akhdama).
+static void GndResolve(void *entry, void **outFn, void **outAddr, uint32_t *outOrig)
+{
+    *outFn = nullptr;
+    *outAddr = nullptr;
+    *outOrig = 0;
+    if (!entry)
+        return;
+    void *addr = entry;
+    uint32_t w = *(const volatile uint32_t *)entry;
+    if ((w & 0xFC000000u) == 0x14000000u) // B (imm26 signed)
+    {
+        int32_t imm = (int32_t)(w & 0x03FFFFFFu);
+        if (imm & 0x02000000)
+            imm -= 0x04000000; // sign-extend
+        long long d = (long long)((intptr_t)entry + ((intptr_t)imm << 2)) - (long long)(intptr_t)entry;
+        long long ad = (d < 0) ? -d : d;
+        if (ad > 16LL * 1024 * 1024)
+            return; // thunk gharib (>16 MB) -> fail-closed, ma n-patch-ich walou
+        addr = (void *)((intptr_t)entry + ((intptr_t)imm << 2));
+        w = *(const volatile uint32_t *)addr;
+    }
+    if (w == 0)
+        return; // null page -> fail-closed
+    *outFn = entry;
+    *outAddr = addr;
+    *outOrig = w;
+}
 static void GndInit()
 {
     if (g_gndTried)
         return;
-    g_gndTried = true;
-    g_gndFn[0] = GndFn("0x8DF4F10"); // CharacterController.get_isGrounded
-    g_gndFn[1] = GndFn("0x6469184"); // PhysicalCCT.get_IsGrounded
-    for (int i = 0; i < 2; i++)
+    if (++g_gndTries > 600) // ~10 s f 60 fps -> n-hbs l-retry (ma n-retry-ch l-abad)
+        return;
+    g_gndFn[0] = GndFn("0x8DF4F10"); // CharacterController.get_isGrounded (dump L1859369)
+    g_gndFn[1] = GndFn("0x6469184"); // PhysicalCCT.get_IsGrounded       (dump L1322290)
+    g_gndFn[2] = GndFn("0x56870BC"); // Player.IsGrounded()              (dump L1177574)
+    if (!g_gndFn[0] && !g_gndFn[1] && !g_gndFn[2])
+        return; // offsets ma-wslch -> n-retry f l-frame jbda (ma n-saddch abadan)
+    for (int i = 0; i < 3; i++)
         if (g_gndFn[i])
-            g_gndOrig[i] = *(const volatile uint32_t *)g_gndFn[i];
-}
-static bool GndProt(void *addr, size_t len, int prot)
-{
-    long ps = sysconf(_SC_PAGESIZE);
-    if (ps <= 0)
-        ps = 0x4000; // A13+ = 16 KB
-    uintptr_t s = (uintptr_t)addr & ~((uintptr_t)ps - 1);
-    uintptr_t e = ((uintptr_t)addr + len + (uintptr_t)ps - 1) & ~((uintptr_t)ps - 1);
-    size_t n = (size_t)(e - s);
-    if (mprotect((void *)s, n, prot) == 0)
-        return true;
-    // iOS fallback: vm_protect + VM_PROT_COPY (COW l-page)
-    return vm_protect(mach_task_self(), (vm_address_t)s, (vm_size_t)n, false,
-                      (vm_prot_t)prot | VM_PROT_COPY) == KERN_SUCCESS;
+            GndResolve(g_gndFn[i], &g_gndFn[i], &g_gndAddr[i], &g_gndOrig[i]);
+    if (!g_gndFn[0] && !g_gndFn[1] && !g_gndFn[2])
+        return; // dladdr / thunk-decode ma-9darch -> retry
+    g_gndTried = true;
 }
 // I-cache flush ba3d l-patch: sys_icache_invalidate (Darwin, libSystem).
 // `__builtin___clear_cache` MA-KHDEMCH hna: clang-11 kay-taleb `___clear_cache`
@@ -2068,48 +2096,83 @@ static bool GndProt(void *addr, size_t len, int prot)
 extern "C" void sys_icache_invalidate(void *start, size_t len);
 #endif
 
+// L-write 3la __TEXT — tartib Mem.h (l-wa7d li KHDDAM f had l-projet, w li
+// kay-khddem f kol l-features l-ouhra):
+//   1) vm_protect(READ|WRITE|VM_PROT_COPY)  -> COW l-page.
+//      MA-n-siwelch EXECUTE f had l-step: REQUEST dyal RWX 3la __TEXT
+//      kay-rfi3-ha l-kernel (W^X / EACCES) -> l-patch MA-YTSAYB-CH.
+//      Hadi hiya l-mochkil l-qdima: l-awal kanner 1) RWX mprotect
+//      2) vm_protect(RWX|COPY) — l-2 homa kay-failiw, w l-write ma-kaytirich.
+//   2) write + sys_icache_invalidate
+//   3) vm_protect(READ|EXECUTE) -> n-3awed l-protection l-asliya
+//   4) READ-BACK verify — ila l-ma9rit ma-wld-ch l-patch -> false
 static bool GndWrite(int i, const uint32_t *words)
 {
-    void *p = g_gndFn[i];
+    void *p = g_gndAddr[i];
     if (!p)
         return false;
-    uint32_t first = *(const volatile uint32_t *)p;
-    // null page wla tail-`b` (function dyal 4 bytes) -> ma n-patch-ich (ghir
-    // ma nqelleb-walou, l-8 bytes ghadi y-seddou f l-fonction li mb3dha)
-    if (first == 0 || (first & 0xFC000000u) == 0x14000000u)
-        return false;
-    // 1) RWX f nafs l-trek9a -> ma kayn-ch window bla EXEC (safe m3a l-threads)
-    if (GndProt(p, 8, PROT_READ | PROT_WRITE | PROT_EXEC))
-    {
-        *(volatile uint32_t *)p = words[0];
-        *(volatile uint32_t *)((char *)p + 4) = words[1];
-        sys_icache_invalidate(p, 8);
-        return true;
-    }
-    // 2) fallback: RW -> write -> RX (window sghir bzzaf)
-    if (!GndProt(p, 8, PROT_READ | PROT_WRITE))
-        return false;
+    long ps = sysconf(_SC_PAGESIZE);
+    if (ps <= 0)
+        ps = 0x4000; // A13+ = 16 KB, MA 4096
+    uintptr_t s = (uintptr_t)p & ~((uintptr_t)ps - 1);
+    uintptr_t e = ((uintptr_t)p + 8 + (uintptr_t)ps - 1) & ~((uintptr_t)ps - 1);
+    size_t n = (size_t)(e - s);
+    mach_port_t task = mach_task_self();
+
+    bool open = false;
+    // (a) Mem.h path — l-wa7d li khddam 100% f had l-projet
+    if (vm_protect(task, (vm_address_t)s, (vm_size_t)n, false,
+                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS)
+        open = true;
+    // (b) POSIX RWX — ila n9der (bla window bla EXEC, a7san m3a l-threads)
+    if (!open && mprotect((void *)s, n, PROT_READ | PROT_WRITE | PROT_EXEC) == 0)
+        open = true;
+    // (c) POSIX RW — window sghir bzzaf (nfs l-Mem.h)
+    if (!open && mprotect((void *)s, n, PROT_READ | PROT_WRITE) == 0)
+        open = true;
+    if (!open)
+        return false; // ma-qdernach n-9lebou l-page -> fail-closed
+
     *(volatile uint32_t *)p = words[0];
     *(volatile uint32_t *)((char *)p + 4) = words[1];
+
+    // n-3awed l-protection qbel mn l-flush (ma nkhelli-ch RWX/RW f l-final)
+    vm_protect(task, (vm_address_t)s, (vm_size_t)n, false,
+               VM_PROT_READ | VM_PROT_EXECUTE);
+    mprotect((void *)s, n, PROT_READ | PROT_EXEC);
     sys_icache_invalidate(p, 8);
-    GndProt(p, 8, PROT_READ | PROT_EXEC);
-    return true;
+
+    // READ-BACK: l-patch lazem y-ban f l-ma9rit, ilamchi -> ghir ma ndiro walou
+    return *(const volatile uint32_t *)p == words[0] &&
+           *(const volatile uint32_t *)((char *)p + 4) == words[1];
 }
 
 void RunGroundedCheat()
 {
     GndInit();
-    if (!g_gndFn[0] && !g_gndFn[1])
+    if (!g_gndFn[0] && !g_gndFn[1] && !g_gndFn[2])
         return; // offsets ma-tqdlch -> fail-closed, ghir ma ndiro walou
+    // l-ghira dyal l-patch (diagnostic f l-panel): kam men getter mpatchi?
+    int np = 0;
+    for (int i = 0; i < 3; i++)
+        if (g_gndAddr[i] && *(const volatile uint32_t *)g_gndAddr[i] == kGndPatch[0])
+            np++;
+    g_gndPatched = np;
     void *m = game_sdk->Curent_Match();
     void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
     bool want = (Vars.JuFly || Vars.FlyAuto) && local && game_sdk->get_MaxHP(local) > 0;
     if (want == g_gndOn)
         return; // state already matches -> ma n-mprotect-ch kol frame
     bool allOk = true;
-    for (int i = 0; i < 2; i++)
-        if (g_gndFn[i] && !GndWrite(i, want ? kGndPatch : g_gndOrig))
+    for (int i = 0; i < 3; i++)
+        if (g_gndAddr[i] && !GndWrite(i, want ? kGndPatch : g_gndOrig))
             allOk = false;
+    // re-count ba3d l-write (l-read-back dyal GndWrite howa l-haqiqi)
+    np = 0;
+    for (int i = 0; i < 3; i++)
+        if (g_gndAddr[i] && *(const volatile uint32_t *)g_gndAddr[i] == kGndPatch[0])
+            np++;
+    g_gndPatched = np;
     // ON: ghir mnin kolchi n9a; OFF: n-3awed n-provi la nqder-ch (retry)
     g_gndOn = want ? allOk : !allOk;
 }

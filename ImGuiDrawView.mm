@@ -620,6 +620,8 @@ ImFont* Urbanist;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("JU FLY"), &Vars.JuFly))
                                 gFltShow[FLTBTN_JUFLY] = Vars.JuFly;
+                            if (Vars.JuFly)
+                                ImGui::TextDisabled("JU FLY: %d/3 grounded getters patched", g_gndPatched);
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
