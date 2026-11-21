@@ -723,6 +723,7 @@ ImFont* Urbanist;
             RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
             RunFlyAuto(io.DeltaTime); // FLY AUTO (RIOSSM flyair): rise + DELAY auto-off
             RunFlyJump(io.DeltaTime); // FLY JUMP v2: HIS jump -> +2 m step
+            RunGroundedCheat(); // FORCE GROUNDED (user snippet) -> jump y-khdem m3a FlyAuto
             RunStopTime();
             RunDownCover();
             RunGhost();

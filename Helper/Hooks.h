@@ -2031,6 +2031,119 @@ void RunFlyJump(float dt)
     }
 }
 
+// ---- FORCE GROUNDED (user snippet, NO substrate) ---------------------------
+// user: "ZID HAD L METHOD T FLY JUMP M3A FLY AUTO BCH YKHDM"
+// Snippet dyalo: hook get_isGrounded / get_IsGrounded -> "if (flag) return true".
+// HNA makaynch MobileSubstrate (ESign crash) -> n-patchiw l-code dyal l-getter
+// nefsso w n-3awedh mnin yte7ti:
+//     mov w0, #1   (0x52800020)
+//     ret          (0xD65F03C0)
+// 8 bytes. Gate = Vars.FlyJump || Vars.FlyAuto (nfs l-flag dyalo) + lobby
+// guard (get_MaxHP <= 0) -> n-3awed l-orig. State-change ghir (ma n-mprotect-ch
+// kol frame).
+// Targets (dump.cs iOS 1.132.X), juuj li f snippet nefsso:
+//     CharacterController.get_isGrounded   0x8DF4F10   (Unity, lowercase)
+//     PhysicalCCT.get_IsGrounded           0x6469184   (COW.GamePlay, capital)
+// dladdr fail-closed (nfs l-pattern dyal Transform_SetPosition) -> lazem
+// y-resolve f nafs l-image dyal Transform::get_position (0x8D6C1EC), okhra -> ghir.
+// Page size = sysconf(_SC_PAGESIZE) -> iPhone 11 (A13) = 16 KB, MA 4096.
+#include <sys/mman.h>
+#include <unistd.h>
+#include <mach/mach.h>
+
+static const uint32_t kGndPatch[2] = {0x52800020u, 0xD65F03C0u}; // mov w0,#1 ; ret
+static void *g_gndFn[2] = {nullptr, nullptr};
+static uint32_t g_gndOrig[2] = {0u, 0u};
+static bool g_gndTried = false;
+static bool g_gndOn = false;
+
+static void *GndFn(const char *offHex)
+{
+    uintptr_t off = strtoull(offHex, NULL, 0);
+    if (!off)
+        return nullptr;
+    void *cand = (void *)getRealOffset(off);
+    Dl_info goodInfo{};
+    Dl_info candInfo{};
+    if (cand &&
+        dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+        dladdr(cand, &candInfo) &&
+        goodInfo.dli_fbase && candInfo.dli_fbase &&
+        goodInfo.dli_fbase == candInfo.dli_fbase)
+        return cand;
+    return nullptr;
+}
+static void GndInit()
+{
+    if (g_gndTried)
+        return;
+    g_gndTried = true;
+    g_gndFn[0] = GndFn("0x8DF4F10"); // CharacterController.get_isGrounded
+    g_gndFn[1] = GndFn("0x6469184"); // PhysicalCCT.get_IsGrounded
+    for (int i = 0; i < 2; i++)
+        if (g_gndFn[i])
+            g_gndOrig[i] = *(const volatile uint32_t *)g_gndFn[i];
+}
+static bool GndProt(void *addr, size_t len, int prot)
+{
+    long ps = sysconf(_SC_PAGESIZE);
+    if (ps <= 0)
+        ps = 0x4000; // A13+ = 16 KB
+    uintptr_t s = (uintptr_t)addr & ~((uintptr_t)ps - 1);
+    uintptr_t e = ((uintptr_t)addr + len + (uintptr_t)ps - 1) & ~((uintptr_t)ps - 1);
+    size_t n = (size_t)(e - s);
+    if (mprotect((void *)s, n, prot) == 0)
+        return true;
+    // iOS fallback: vm_protect + VM_PROT_COPY (COW l-page)
+    return vm_protect(mach_task_self(), (vm_address_t)s, (vm_size_t)n, false,
+                      (vm_prot_t)prot | VM_PROT_COPY) == KERN_SUCCESS;
+}
+static bool GndWrite(int i, const uint32_t *words)
+{
+    void *p = g_gndFn[i];
+    if (!p)
+        return false;
+    uint32_t first = *(const volatile uint32_t *)p;
+    // null page wla tail-`b` (function dyal 4 bytes) -> ma n-patch-ich (ghir
+    // ma nqelleb-walou, l-8 bytes ghadi y-seddou f l-fonction li mb3dha)
+    if (first == 0 || (first & 0xFC000000u) == 0x14000000u)
+        return false;
+    // 1) RWX f nafs l-trek9a -> ma kayn-ch window bla EXEC (safe m3a l-threads)
+    if (GndProt(p, 8, PROT_READ | PROT_WRITE | PROT_EXEC))
+    {
+        *(volatile uint32_t *)p = words[0];
+        *(volatile uint32_t *)((char *)p + 4) = words[1];
+        __builtin___clear_cache((char *)p, (char *)p + 8);
+        return true;
+    }
+    // 2) fallback: RW -> write -> RX (window sghir bzzaf)
+    if (!GndProt(p, 8, PROT_READ | PROT_WRITE))
+        return false;
+    *(volatile uint32_t *)p = words[0];
+    *(volatile uint32_t *)((char *)p + 4) = words[1];
+    __builtin___clear_cache((char *)p, (char *)p + 8);
+    GndProt(p, 8, PROT_READ | PROT_EXEC);
+    return true;
+}
+
+void RunGroundedCheat()
+{
+    GndInit();
+    if (!g_gndFn[0] && !g_gndFn[1])
+        return; // offsets ma-tqdlch -> fail-closed, ghir ma ndiro walou
+    void *m = game_sdk->Curent_Match();
+    void *local = m ? game_sdk->GetLocalPlayer(m) : nullptr;
+    bool want = (Vars.FlyJump || Vars.FlyAuto) && local && game_sdk->get_MaxHP(local) > 0;
+    if (want == g_gndOn)
+        return; // state already matches -> ma n-mprotect-ch kol frame
+    bool allOk = true;
+    for (int i = 0; i < 2; i++)
+        if (g_gndFn[i] && !GndWrite(i, want ? kGndPatch : g_gndOrig))
+            allOk = false;
+    // ON: ghir mnin kolchi n9a; OFF: n-3awed n-provi la nqder-ch (retry)
+    g_gndOn = want ? allOk : !allOk;
+}
+
 // ---- Stop Time (Elite: Speed Timer freeze) — SEPARATE again ---------------
 // "ywe9ef l'wa9t": TimeService.m_FixedDeltaTime -> 0.00001 (near freeze),
 // OFF -> restore the saved value (Elite restores 0.033).
