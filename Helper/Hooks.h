@@ -967,8 +967,14 @@ static int flyZPhase = 0;      // ECSMatchPhase raw (0 Waiting / 1 Prepare / 2 F
 static bool flyTPDone = false; // one-shot sky blast done -> free horizontal sky hover
 static bool g_skyActivatedByAuto = false;
 static bool g_skyTpNextDropZoneGather = false;
-static Vector3 g_roundAnchorPos; // plain zero-init static (no dynamic init in __mod_init_func)
+static Vector3 g_roundAnchorPos;       // saved position in the map BEFORE teleporting to rwida
 static bool g_hasRoundAnchor = false;
+static Vector3 g_preRwidaReturnPos;    // locked ground center of the pre-rwida map
+static bool g_hasPreRwidaReturnPos = false;
+static Vector3 g_lastRwidaMarkPos;     // rwida position to reject when returning to pre-rwida map
+static bool g_hasLastRwidaMarkPos = false;
+static bool g_skyReturnLockActive = false;
+static std::chrono::steady_clock::time_point g_skyReturnLockUntil;
 
 static void *GetLocalCharacterController(void *localPlayer)
 {
@@ -1054,50 +1060,24 @@ static void TeleportPlayerReal(void *localPlayer, void *tf, Vector3 newPos)
     ZeroPhysXFallVelocity(localPlayer);
 }
 
-// Primary: COW.UIMapContentController.GetSafeZoneInnerCenter() (0x23912F0) / m_InnerCenterPos (+0x6C8)
-// Secondary: match->SafeZone (+0x210) -> ZoneDefinition (+0xB8) -> OuterCenter (+0x14)
+static inline float Dist2D_XZ(Vector3 a, Vector3 b)
+{
+    float dx = a.x - b.x;
+    float dz = a.z - b.z;
+    return sqrtf(dx * dx + dz * dz);
+}
+
+static inline bool IsNearRwidaMark(Vector3 p)
+{
+    if (!g_hasLastRwidaMarkPos || g_lastRwidaMarkPos == Vector3::zero())
+        return false;
+    return Dist2D_XZ(p, g_lastRwidaMarkPos) < 55.0f;
+}
+
+// 3D world SafeZone center ONLY (match->SafeZone +0x210 -> ZoneDefinition +0xB8 -> OuterCenter +0x14 / InnerCenter +0x24)
+// NOTE: Never use UIMapContentController.GetSafeZoneInnerCenter() here because that returns 2D NGUI minimap pixel coords!
 static bool BD_TryGetSafeZoneCenter(void *match, Vector3 &out)
 {
-    void *scene = GetInGameUIScene();
-    if (scene && (uintptr_t)scene > 0x100000000ULL)
-    {
-        void *bigMap = *(void **)((uintptr_t)scene + oxo("0x458"));
-        void *mapContent = (bigMap && (uintptr_t)bigMap > 0x100000000ULL)
-                               ? *(void **)((uintptr_t)bigMap + oxo("0xA8"))
-                               : nullptr;
-        if (mapContent && (uintptr_t)mapContent > 0x100000000ULL)
-        {
-            static FFVec3 (*fnSafeZoneInnerCenter)(void *) = nullptr;
-            static bool tried = false;
-            if (!tried)
-            {
-                tried = true;
-                void *cand = (void *)getRealOffset(oxo("0x23912F0"));
-                Dl_info goodInfo{}, candInfo{};
-                if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
-                    dladdr(cand, &candInfo) && goodInfo.dli_fbase == candInfo.dli_fbase)
-                {
-                    fnSafeZoneInnerCenter = (FFVec3 (*)(void *))cand;
-                }
-            }
-            Vector3 c = Vector3::zero();
-            if (fnSafeZoneInnerCenter)
-            {
-                FFVec3 r = fnSafeZoneInnerCenter(mapContent);
-                c = Vector3(r.x, r.y, r.z);
-            }
-            if (fabsf(c.x) < 0.01f && fabsf(c.z) < 0.01f)
-            {
-                c = *(Vector3 *)((uintptr_t)mapContent + oxo("0x6C8")); // m_InnerCenterPos
-            }
-            if (fabsf(c.x) > 0.1f || fabsf(c.z) > 0.1f)
-            {
-                out = c;
-                return true;
-            }
-        }
-    }
-
     if (match && (uintptr_t)match > 0x100000000ULL)
     {
         void *safeZone = *(void **)((uintptr_t)match + oxo("0x210"));
@@ -1109,9 +1089,16 @@ static bool BD_TryGetSafeZoneCenter(void *match, Vector3 &out)
             Vector3 zoneC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x14"));
             float zoneR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
             flyZR = zoneR;
-            if (zoneR >= 5.0f && (fabsf(zoneC.x) > 0.1f || fabsf(zoneC.z) > 0.1f))
+            if (zoneR >= 8.0f && (fabsf(zoneC.x) > 1.0f || fabsf(zoneC.z) > 1.0f) && !IsNearRwidaMark(zoneC))
             {
                 out = zoneC;
+                return true;
+            }
+            Vector3 innerC = *(Vector3 *)((uintptr_t)zoneDef + oxo("0x24"));
+            float innerR = *(float *)((uintptr_t)zoneDef + oxo("0x30"));
+            if (innerR >= 5.0f && (fabsf(innerC.x) > 1.0f || fabsf(innerC.z) > 1.0f) && !IsNearRwidaMark(innerC))
+            {
+                out = innerC;
                 return true;
             }
         }
@@ -1119,8 +1106,7 @@ static bool BD_TryGetSafeZoneCenter(void *match, Vector3 &out)
     return false;
 }
 
-// Secondary: average position of alive players in the current round (EXCLUDING localPlayer so a trip to
-// a far-away rwida in another map never pulls the center away from the current round!)
+// Secondary: average position of alive players in the current round (EXCLUDING localPlayer and anyone near the far rwida!)
 static bool BD_TryGetZoneGatherCenter(void *match, void *localPlayer, Vector3 &out)
 {
     if (!match || (uintptr_t)match <= 0x100000000ULL)
@@ -1134,6 +1120,19 @@ static bool BD_TryGetZoneGatherCenter(void *match, void *localPlayer, Vector3 &o
     if (total > 64)
         total = 64;
 
+    Vector3 refAnchor = Vector3::zero();
+    bool hasRef = false;
+    if (g_hasPreRwidaReturnPos && g_preRwidaReturnPos != Vector3::zero() && !IsNearRwidaMark(g_preRwidaReturnPos))
+    {
+        refAnchor = g_preRwidaReturnPos;
+        hasRef = true;
+    }
+    else if (g_hasRoundAnchor && g_roundAnchorPos != Vector3::zero() && !IsNearRwidaMark(g_roundAnchorPos))
+    {
+        refAnchor = g_roundAnchorPos;
+        hasRef = true;
+    }
+
     double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
     int n = 0;
     for (int u = 0; u < total; u++)
@@ -1146,7 +1145,9 @@ static bool BD_TryGetZoneGatherCenter(void *match, void *localPlayer, Vector3 &o
         if ((game_sdk->get_IsDieing && game_sdk->get_IsDieing(player)) || game_sdk->GetHp(player) <= 0)
             continue;
         Vector3 p = getPosition(player);
-        if (p == Vector3::zero())
+        if (p == Vector3::zero() || IsNearRwidaMark(p))
+            continue;
+        if (hasRef && Dist2D_XZ(p, refAnchor) > 220.0f)
             continue;
         sumX += p.x;
         sumY += p.y;
@@ -1159,38 +1160,57 @@ static bool BD_TryGetZoneGatherCenter(void *match, void *localPlayer, Vector3 &o
     return true;
 }
 
-// Resolves the exact (X, Y, Z) ground center of the CURRENT round (l rond li fiha 7aliyan)
+// Resolves the exact (X, Y, Z) ground center of the PRE-RWIDA MAP (l map lli knti fiha 9bl ma t-teleporta l rwida!)
 static int ResolveCurrentRoundGroundCenter(void *match, void *localPlayer, Vector3 curPos, Vector3 &outGround)
 {
+    Vector3 baseAnchor = Vector3::zero();
+    bool hasBaseAnchor = false;
+    if (g_hasPreRwidaReturnPos && g_preRwidaReturnPos != Vector3::zero() && !IsNearRwidaMark(g_preRwidaReturnPos))
+    {
+        baseAnchor = g_preRwidaReturnPos;
+        hasBaseAnchor = true;
+    }
+    else if (g_hasRoundAnchor && g_roundAnchorPos != Vector3::zero() && !IsNearRwidaMark(g_roundAnchorPos))
+    {
+        baseAnchor = g_roundAnchorPos;
+        hasBaseAnchor = true;
+    }
+
     Vector3 safeC = Vector3::zero();
     Vector3 gatherC = Vector3::zero();
     bool hasSafe = BD_TryGetSafeZoneCenter(match, safeC);
     bool hasGather = BD_TryGetZoneGatherCenter(match, localPlayer, gatherC);
 
+    // If we have a saved pre-rwida map anchor, ONLY accept SafeZone or GatherCenter if it belongs to that SAME map (within 200m)!
+    if (hasBaseAnchor)
+    {
+        if (hasSafe && Dist2D_XZ(safeC, baseAnchor) <= 200.0f)
+        {
+            if (fabsf(safeC.y) < 0.5f)
+                safeC.y = (hasGather && fabsf(gatherC.y) >= 0.5f) ? gatherC.y : baseAnchor.y;
+            outGround = safeC;
+            return 1; // st=1: SafeZone center inside pre-rwida map
+        }
+        if (hasGather && Dist2D_XZ(gatherC, baseAnchor) <= 200.0f)
+        {
+            outGround = gatherC;
+            return 2; // st=2: Alive players center inside pre-rwida map
+        }
+        outGround = baseAnchor;
+        return 3; // st=3: Exact pre-rwida map position saved before rwida TP
+    }
+
     if (hasSafe)
     {
-        // If UIMapContentController returned a 2D map center with Y == 0, fill ground Y from alive players or round anchor
         if (fabsf(safeC.y) < 0.5f)
-        {
-            if (hasGather && fabsf(gatherC.y) >= 0.5f)
-                safeC.y = gatherC.y;
-            else if (g_hasRoundAnchor && fabsf(g_roundAnchorPos.y) >= 0.5f)
-                safeC.y = g_roundAnchorPos.y;
-            else
-                safeC.y = curPos.y;
-        }
+            safeC.y = (hasGather && fabsf(gatherC.y) >= 0.5f) ? gatherC.y : curPos.y;
         outGround = safeC;
-        return 1; // st=1: SafeZone center
+        return 1;
     }
     if (hasGather)
     {
         outGround = gatherC;
-        return 2; // st=2: Alive players gather center in current round
-    }
-    if (g_hasRoundAnchor && g_roundAnchorPos != Vector3::zero())
-    {
-        outGround = g_roundAnchorPos;
-        return 3; // st=3: Saved current round spawn anchor
+        return 2;
     }
     outGround = curPos;
     return 4;
@@ -1209,6 +1229,7 @@ void RunFlyV2()
         flyZPhase = 0;
         flyTPDone = false;
         g_skyActivatedByAuto = false;
+        g_skyReturnLockActive = false;
         return;
     }
 
@@ -1229,6 +1250,7 @@ void RunFlyV2()
             g_skyActivatedByAuto = false;
         }
         flyTPDone = false;
+        g_skyReturnLockActive = false;
         return;
     }
 
@@ -1250,6 +1272,7 @@ void RunFlyV2()
     {
         flyZSt = 6;
         flyTPDone = false;
+        g_skyReturnLockActive = false;
         if (g_skyActivatedByAuto)
         {
             Vars.Flyingtest = false;
@@ -1260,7 +1283,7 @@ void RunFlyV2()
 
     float alt = (Vars.flyhei >= 20.0f) ? Vars.flyhei : 300.0f;
 
-    // One-shot high-altitude teleport directly to the CURRENT ROUND center (SafeZone / ZoneGather / RoundAnchor)
+    // One-shot high-altitude teleport directly back to the PRE-RWIDA MAP in the sky
     if (!flyTPDone || g_skyTpNextDropZoneGather)
     {
         g_skyTpNextDropZoneGather = false;
@@ -1286,7 +1309,6 @@ void RunFlyV2()
             flyZR = *(float *)((uintptr_t)zoneDef + oxo("0x20"));
     }
 
-    // Hover loop: keep altitude locked in the sky while allowing free horizontal movement/look
     if ((FlyalturaEXposeX == 0.0f && FlyalturaEXposeY == 0.0f && FlyalturaEXposeZ == 0.0f) ||
         FlyalturaEXpose == nullptr)
     {
@@ -1298,6 +1320,24 @@ void RunFlyV2()
         FlyalturaEXpose = localPlayer;
     }
 
+    // While the post-rwida return lock is active (850ms) OR if the tire-launch parabola in the rwida's map
+    // pulls the player back toward the rwida / away from the pre-rwida map (> 165m), force full (X, Y, Z) return!
+    if (g_skyReturnLockActive)
+    {
+        if (std::chrono::steady_clock::now() >= g_skyReturnLockUntil)
+            g_skyReturnLockActive = false;
+    }
+
+    Vector3 anchorXZ(FlyalturaEXposeX, FlyalturaEXposeY, FlyalturaEXposeZ);
+    bool pulledBackToRwida = IsNearRwidaMark(pos) || (Dist2D_XZ(pos, anchorXZ) > 165.0f);
+    if (g_skyReturnLockActive || pulledBackToRwida)
+    {
+        Vector3 lockedSkyPos(FlyalturaEXposeX, FlyalturaEXposeY + alt, FlyalturaEXposeZ);
+        TeleportPlayerReal(localPlayer, tf, lockedSkyPos);
+        return;
+    }
+
+    // Hover loop inside pre-rwida map: keep altitude locked in the sky while allowing free horizontal movement/look
     ZeroPhysXFallVelocity(localPlayer);
     Transform_SetPosition(tf, Vector3(pos.x, FlyalturaEXposeY + alt, pos.z));
 }
@@ -2773,7 +2813,7 @@ static bool g_tpPin = false;
 static Vector3 g_tpPinPos;
 static std::chrono::steady_clock::time_point g_tpPinStart;
 
-// ---- AUTO SKY TP CHAIN (Ported from Android BD_HACKER.cpp [5] & [6] to iOS) ----
+// ---- AUTO SKY TP CHAIN (Pre-Rwida Map Capture -> Rwida Bounce -> Return to Pre-Rwida Map in Sky) ----
 static bool s_teleMarkChainPending = false;
 static bool s_teleMarkChainSkyTpPending = false;
 static bool s_teleMarkChainWithSkyTp = false;
@@ -2781,9 +2821,55 @@ static bool s_teleMarkChainHasMark = false;
 static Vector3 s_chainMarkPos; // plain zero-init static (no dynamic init in __mod_init_func)
 static float s_rwidaMinY = 999999.0f;
 static std::chrono::steady_clock::time_point s_teleMarkChainStart;
+static std::chrono::steady_clock::time_point s_rwidaFallStart;
+static bool s_rwidaFallStarted = false;
 static bool s_skyTpFiredForRound = false;
 static bool s_sawPrepareCountdown = false;
 static bool s_lastAutoSkyToggle = false;
+
+// Captures & locks the exact map position (X, Y, Z) where the player was BEFORE teleporting to the rwida
+static void CapturePreRwidaReturnMap(void *match, void *local, Vector3 curPos, Vector3 rwidaTarget)
+{
+    if (rwidaTarget != Vector3::zero())
+    {
+        g_lastRwidaMarkPos = rwidaTarget;
+        g_hasLastRwidaMarkPos = true;
+    }
+
+    if (curPos != Vector3::zero() && (rwidaTarget == Vector3::zero() || Dist2D_XZ(curPos, rwidaTarget) > 45.0f))
+    {
+        g_roundAnchorPos = curPos;
+        g_hasRoundAnchor = true;
+    }
+
+    Vector3 anchor = (g_hasRoundAnchor && g_roundAnchorPos != Vector3::zero() && !IsNearRwidaMark(g_roundAnchorPos))
+                         ? g_roundAnchorPos
+                         : curPos;
+    if (anchor == Vector3::zero() || IsNearRwidaMark(anchor))
+        return;
+
+    Vector3 safeC = Vector3::zero();
+    Vector3 gatherC = Vector3::zero();
+    bool hasSafe = BD_TryGetSafeZoneCenter(match, safeC);
+    bool hasGather = BD_TryGetZoneGatherCenter(match, local, gatherC);
+
+    if (hasSafe && Dist2D_XZ(safeC, anchor) <= 200.0f)
+    {
+        if (fabsf(safeC.y) < 0.5f)
+            safeC.y = (hasGather && fabsf(gatherC.y) >= 0.5f) ? gatherC.y : anchor.y;
+        g_preRwidaReturnPos = safeC;
+        g_hasPreRwidaReturnPos = true;
+        return;
+    }
+    if (hasGather && Dist2D_XZ(gatherC, anchor) <= 200.0f)
+    {
+        g_preRwidaReturnPos = gatherC;
+        g_hasPreRwidaReturnPos = true;
+        return;
+    }
+    g_preRwidaReturnPos = anchor;
+    g_hasPreRwidaReturnPos = true;
+}
 
 static void ArmTeleportMarkChain(bool withSkyTp, Vector3 markPos, bool hasMark)
 {
@@ -2794,6 +2880,7 @@ static void ArmTeleportMarkChain(bool withSkyTp, Vector3 markPos, bool hasMark)
     s_chainMarkPos = markPos;
     s_rwidaMinY = markPos.y + 7.0f;
     s_teleMarkChainStart = std::chrono::steady_clock::now();
+    s_rwidaFallStarted = false;
 }
 
 static void PollTeleportMarkChain()
@@ -2807,8 +2894,8 @@ static void PollTeleportMarkChain()
 
     if (s_teleMarkChainPending && !s_teleMarkChainSkyTpPending)
     {
-        // Always disable Speed Timer after 300ms so PhysX & tire bounce run at normal speed
-        if (elapsedMs >= 300 && Vars.StopTime)
+        // Always disable Speed Timer after 250ms so PhysX & tire bounce run at normal speed
+        if (elapsedMs >= 250 && Vars.StopTime)
         {
             Vars.StopTime = false;
         }
@@ -2820,10 +2907,10 @@ static void PollTeleportMarkChain()
             return;
         }
 
-        // If no mark (direct SafeZone Auto Sky), wait 300ms then fire Sky TP
+        // If no mark (direct SafeZone Auto Sky), wait 250ms then fire Sky TP
         if (!s_teleMarkChainHasMark)
         {
-            if (elapsedMs >= 300)
+            if (elapsedMs >= 250)
             {
                 s_teleMarkChainPending = false;
                 s_teleMarkChainSkyTpPending = true;
@@ -2832,9 +2919,19 @@ static void PollTeleportMarkChain()
         }
 
         // With a mark (rwida in another map):
-        // 1) Wait for the 350ms +7m pin to release so the player drops onto the rwida
+        // 1) Wait for the pin above the rwida to release so the player starts falling onto the rwida
         if (g_tpPin)
             return;
+
+        if (!s_rwidaFallStarted)
+        {
+            s_rwidaFallStarted = true;
+            s_rwidaFallStart = std::chrono::steady_clock::now();
+        }
+
+        long long fallMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - s_rwidaFallStart)
+                               .count();
 
         // 2) Watch player Y as they fall onto the rwida and bounce upward
         void *match = game_sdk->Curent_Match();
@@ -2848,16 +2945,16 @@ static void PollTeleportMarkChain()
             {
                 if (curPos.y < s_rwidaMinY)
                     s_rwidaMinY = curPos.y;
-                // Tire launch detected: player dropped near the rwida and is now rising upward!
-                if (s_rwidaMinY <= s_chainMarkPos.y + 6.0f && curPos.y >= s_rwidaMinY + 0.75f)
+                // Tire launch detected: player dropped onto the rwida and is now rising upward!
+                if (s_rwidaMinY <= s_chainMarkPos.y + 4.5f && curPos.y >= s_rwidaMinY + 0.45f)
                 {
                     bouncedOnRwida = true;
                 }
             }
         }
 
-        // Trigger return to current round as soon as rwida bounce starts OR after 750ms total
-        if (bouncedOnRwida || elapsedMs >= 750)
+        // Trigger return to the PRE-RWIDA MAP as soon as rwida bounce starts OR after 700ms of fall time
+        if (bouncedOnRwida || fallMs >= 700)
         {
             s_teleMarkChainPending = false;
             s_teleMarkChainSkyTpPending = true;
@@ -2874,14 +2971,16 @@ static void PollTeleportMarkChain()
         g_skyTpNextDropZoneGather = true;
         flyTPDone = false;
         g_skyActivatedByAuto = true;
-        Vars.Flyingtest = true; // Activates RunFlyV2 -> teleports back to current round safe-zone center in sky!
+        // Lock full (X, Y, Z) at the pre-rwida map in the sky for 850ms so the rwida jump parabola cannot pull us back!
+        g_skyReturnLockActive = true;
+        g_skyReturnLockUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(850);
+        Vars.Flyingtest = true; // Activates RunFlyV2 -> returns to the map we were in BEFORE teleporting to the rwida!
     }
 }
 
 // ---- TeleportToMark (Elite ExecuteTeleMark sequence + Auto Sky rwida chain) ----
-// hop +50 then arrive +7 m above the target (mark/rwida), HOLD 350-500 ms with
-// the plain pin, then release -> drop onto the rwida. When AutoSky is ON, arms the
-// return chain so after hitting the rwida in another map it brings you back to the current round!
+// Saves the exact map we were in BEFORE teleporting to the rwida, teleports above the rwida,
+// drops onto the rwida, and when AutoSky is ON returns in the sky to the pre-rwida map!
 static bool TeleportToMark(Vector3 target)
 {
     void *match = game_sdk->Curent_Match();
@@ -2897,25 +2996,23 @@ static bool TeleportToMark(Vector3 target)
     if (pos == Vector3::zero())
         return false;
 
-    // Save current round ground position before teleporting away to a rwida in another map
-    if (Vector3::Distance(pos, target) > 35.0f || !g_hasRoundAnchor)
-    {
-        g_roundAnchorPos = pos;
-        g_hasRoundAnchor = true;
-    }
+    // BEFORE leaving our current map for the rwida in the other map, capture & lock our pre-rwida map position!
+    CapturePreRwidaReturnMap(match, local, pos, target);
 
     // If we were hovering in the sky, pause sky hover while visiting the rwida
     if (Vars.AutoSky && Vars.Flyingtest)
     {
         Vars.Flyingtest = false;
         flyTPDone = false;
+        g_skyReturnLockActive = false;
     }
 
     Vector3 up = pos;
     up.y += 50.0f;
     TeleportPlayerReal(local, tf, up); // hop first (anti ground-clamp)
     Vector3 dst = target;
-    dst.y += 7.0f;
+    // When AutoSky is ON, drop from +5.0m above the rwida so we hit the tire fast and cleanly; +7.0m for normal TeleMark
+    dst.y += Vars.AutoSky ? 5.0f : 7.0f;
     TeleportPlayerReal(local, tf, dst);
     g_tpPin = true;
     g_tpPinPos = dst;
@@ -2928,34 +3025,13 @@ static bool TeleportToMark(Vector3 target)
     return true;
 }
 
-// ---- RunMarkTP: Tele Mark + Auto Mark + Auto Sky (CS 00:00 & Phase 2) --------
+// ---- RunMarkTP: Tele Mark + Auto Mark + Auto Sky (Phase 2 Round Start) --------
 static bool g_tmDone = false;
 static bool g_amFired = false;
 static bool g_amPin = false;
 static Vector3 g_amTarget;
 static std::chrono::steady_clock::time_point g_amStart;
 static int g_markDbg = 0;
-
-static bool IsCSCountdownZeroZero(void *scene, uint32_t phase)
-{
-    if (!scene || (uintptr_t)scene <= 0x100000000ULL)
-        return false;
-    if (phase == 2)
-        return true;
-    // Check UIInGameScene.m_CSMatchInfoInfoCtrl (+0x798) -> min (+0xC0), sec (+0xC4), mSeconds (+0xB0)
-    void *csCtrl = *(void **)((uintptr_t)scene + oxo("0x798"));
-    if (csCtrl && (uintptr_t)csCtrl > 0x100000000ULL && ((uintptr_t)csCtrl >> 48) == 0)
-    {
-        uint32_t curMin = *(uint32_t *)((uintptr_t)csCtrl + oxo("0xC0"));
-        uint32_t curSec = *(uint32_t *)((uintptr_t)csCtrl + oxo("0xC4"));
-        int32_t mSec = *(int32_t *)((uintptr_t)csCtrl + oxo("0xB0"));
-        if (phase == 1 && (curMin > 0 || curSec > 0 || mSec > 0))
-            s_sawPrepareCountdown = true;
-        if (s_sawPrepareCountdown && curMin == 0 && curSec == 0 && mSec == 0)
-            return true;
-    }
-    return false;
-}
 
 void RunMarkTP()
 {
@@ -2968,17 +3044,16 @@ void RunMarkTP()
     // Poll the Auto Sky chain every frame
     PollTeleportMarkChain();
 
-    // shared +7 m pin: hold the TP arrival (Tele Mark / Auto Sky rwida drop) for
-    // 350 ms (when AutoSky is ON) or 500 ms (normal Tele Mark), then release onto the rwida
+    // Hold the TP arrival above the rwida for 220 ms (when AutoSky is ON) or 500 ms (normal Tele Mark), then release onto the rwida
     if (g_tpPin)
     {
-        long long pinLimitMs = Vars.AutoSky ? 350 : 500;
+        long long pinLimitMs = Vars.AutoSky ? 220 : 500;
         long long tpMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - g_tpPinStart)
                              .count();
         if (tpMs >= pinLimitMs)
         {
-            g_tpPin = false; // pin off -> fall the last 7 m onto the rwida!
+            g_tpPin = false; // pin off -> fall onto the rwida!
         }
         else
         {
@@ -2986,7 +3061,7 @@ void RunMarkTP()
             void *tpLocal = tpMatch ? game_sdk->GetLocalPlayer(tpMatch) : nullptr;
             void *tpTf = tpLocal ? game_sdk->Component_GetTransform(tpLocal) : nullptr;
             if (tpTf)
-                Transform_SetPosition(tpTf, g_tpPinPos); // glued at +7 m
+                Transform_SetPosition(tpTf, g_tpPinPos);
         }
     }
 
@@ -3012,7 +3087,7 @@ void RunMarkTP()
     if (g_tmDone)
         g_markDbg |= 1;
 
-    // ---- Round state & Prepare-phase anchor tracking ----
+    // ---- Round state & Prepare-phase pre-rwida map tracking ----
     void *scene = GetInGameUIScene();
     uint32_t phase = (scene && (uintptr_t)scene > 0x100000000ULL)
                          ? *(uint32_t *)((uintptr_t)scene + oxo("0xD18"))
@@ -3020,7 +3095,8 @@ void RunMarkTP()
 
     if (phase != 2)
     {
-        // In Prepare/Buy phase (phase == 1), continuously record our current round spawn position
+        // In Prepare/Buy phase (phase == 1), continuously record our current round's map position
+        // BEFORE the round starts (and NEVER overwrite with any position near the marked rwida!)
         if (phase == 1 && !g_tpPin && !s_teleMarkChainPending)
         {
             void *match = game_sdk->Curent_Match();
@@ -3029,10 +3105,10 @@ void RunMarkTP()
             if (tf)
             {
                 Vector3 p = game_sdk->get_position(tf);
-                if (p != Vector3::zero())
+                Vector3 mark = MarkedLoc();
+                if (p != Vector3::zero() && (mark == Vector3::zero() || Dist2D_XZ(p, mark) > 45.0f))
                 {
-                    g_roundAnchorPos = p;
-                    g_hasRoundAnchor = true;
+                    CapturePreRwidaReturnMap(match, local, p, mark);
                 }
             }
         }
@@ -3041,6 +3117,8 @@ void RunMarkTP()
         s_skyTpFiredForRound = false;
         s_teleMarkChainPending = false;
         s_teleMarkChainSkyTpPending = false;
+        s_rwidaFallStarted = false;
+        g_skyReturnLockActive = false;
         if (g_skyActivatedByAuto)
         {
             Vars.Flyingtest = false;
@@ -3055,6 +3133,7 @@ void RunMarkTP()
         {
             Vars.Flyingtest = false;
             g_skyActivatedByAuto = false;
+            g_skyReturnLockActive = false;
         }
         s_lastAutoSkyToggle = false;
         s_skyTpFiredForRound = false;
@@ -3066,10 +3145,8 @@ void RunMarkTP()
         s_skyTpFiredForRound = false;
     }
 
-    bool readyToFireRound = (phase == 2) || IsCSCountdownZeroZero(scene, phase);
-
-    // ---- AUTO SKY TP (00:00 countdown / Phase 2 trigger) ----
-    if (Vars.AutoSky && readyToFireRound && !s_skyTpFiredForRound)
+    // ---- AUTO SKY TP (Fires when round enters Fight phase == 2) ----
+    if (Vars.AutoSky && (phase == 2) && !s_skyTpFiredForRound)
     {
         void *match = game_sdk->Curent_Match();
         void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
@@ -3080,35 +3157,47 @@ void RunMarkTP()
             Vector3 mark = MarkedLoc();
             if (mark != Vector3::zero())
             {
-                // If player is NOT already at the rwida mark, teleport to the rwida first -> bounce -> return to current round in sky!
-                if (Vector3::Distance(curPos, mark) > 25.0f)
+                // Capture the pre-rwida map position BEFORE teleporting to the rwida in the other map!
+                CapturePreRwidaReturnMap(match, local, curPos, mark);
+
+                if (Dist2D_XZ(curPos, mark) > 25.0f)
                 {
                     if (TeleportToMark(mark))
                     {
                         s_skyTpFiredForRound = true;
                         s_sawPrepareCountdown = false;
-                        g_amFired = true; // prevent AutoMark from gluing at +1.5m during rwida bounce
+                        g_amFired = true; // prevent AutoMark from interfering
                     }
                 }
                 else
                 {
-                    // Already at the rwida -> return immediately to the current round in the sky!
+                    // Already at the rwida -> return immediately to the pre-rwida map in the sky!
                     s_skyTpFiredForRound = true;
                     s_sawPrepareCountdown = false;
                     g_skyTpNextDropZoneGather = true;
                     flyTPDone = false;
                     g_skyActivatedByAuto = true;
+                    g_skyReturnLockActive = true;
+                    g_skyReturnLockUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(850);
                     Vars.Flyingtest = true;
                 }
             }
             else
             {
-                // No map mark placed: fire Auto Sky straight to the current round's safe-zone center!
+                // No map mark placed: capture current map and fire Auto Sky straight to current round in sky!
+                CapturePreRwidaReturnMap(match, local, curPos, Vector3::zero());
                 s_skyTpFiredForRound = true;
                 s_sawPrepareCountdown = false;
                 ArmTeleportMarkChain(true, Vector3::zero(), false);
             }
         }
+    }
+
+    // When AutoSky is ON, AutoSky owns the rwida teleport & sky return — never let AutoMark glue us at the rwida!
+    if (Vars.AutoSky)
+    {
+        g_amPin = false;
+        return;
     }
 
     // ---- Auto Mark (when AutoSky is OFF, classic 1500ms pin on mark) ----
@@ -3127,14 +3216,13 @@ void RunMarkTP()
         {
             g_amFired = true;
             g_amTarget = mark;
-            // Only glue at +1.5m if AutoSky is OFF (when AutoSky is ON, we want the player to bounce on the rwida and return to the round in the sky!)
-            g_amPin = !Vars.AutoSky;
+            g_amPin = true;
             g_amStart = std::chrono::steady_clock::now();
         }
         return;
     }
     g_markDbg |= 2;
-    if (g_amPin && !Vars.AutoSky)
+    if (g_amPin)
     {
         long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - g_amStart)
