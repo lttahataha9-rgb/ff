@@ -2120,14 +2120,23 @@ static bool GndWrite(int i, const uint32_t *words)
     mach_port_t task = mach_task_self();
 
     bool open = false;
-    // (a) Mem.h path — l-wa7d li khddam 100% f had l-projet
-    if (vm_protect(task, (vm_address_t)s, (vm_size_t)n, false,
-                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS)
+    // TARTIB MUHIM: AWAL l-ottar li MA-KAYNCH fih window bla EXEC —
+    // l-page tetb9a executable f l-wa9t kamel (ma-y9derch y-sigseg f
+    // thread okhra mnin l-page tkoun RW bla X). Ghir mnin ma-qder-ch
+    // n-patchiw bih -> l-ottar li kay-n9ess EXEC (window sghir bzzaf).
+    // (a) POSIX RWX — executable m3a nafs l-write, ma kayn-ch window
+    if (mprotect((void *)s, n, PROT_READ | PROT_WRITE | PROT_EXEC) == 0)
         open = true;
-    // (b) POSIX RWX — ila n9der (bla window bla EXEC, a7san m3a l-threads)
-    if (!open && mprotect((void *)s, n, PROT_READ | PROT_WRITE | PROT_EXEC) == 0)
+    // (b) vm_protect RWX|COPY — nafs l-fikra; iOS kay-rfi3-h ila ma-3andch
+    //     dynamic-codesigning -> y-rouh l (c) (hna ma-ykhlich l-page RW bla X)
+    if (!open && vm_protect(task, (vm_address_t)s, (vm_size_t)n, false,
+                            VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY) == KERN_SUCCESS)
         open = true;
-    // (c) POSIX RW — window sghir bzzaf (nfs l-Mem.h)
+    // (c) Mem.h path — l-wa7d li khddam 100% f had l-projet (RW | COPY)
+    if (!open && vm_protect(task, (vm_address_t)s, (vm_size_t)n, false,
+                            VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS)
+        open = true;
+    // (d) POSIX RW — last resort
     if (!open && mprotect((void *)s, n, PROT_READ | PROT_WRITE) == 0)
         open = true;
     if (!open)

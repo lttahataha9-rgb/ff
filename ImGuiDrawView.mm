@@ -291,6 +291,23 @@ ImFont* Urbanist;
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
+    // ===== AUTO SAVE -> CRASH FIX (user: "mnin dakchi kytsava w kan-restarti
+    // kaytra7 crash ktra") =====
+    // ImGui's AUTO SAVE = io.IniFilename = "imgui.ini" (l-default, imgui.cpp
+    // L1408). Kay-khdem b tariqten automatiques:
+    //   - NewFrame() -> UpdateSettings(): kay-QRA l-file f l-frame l-awal
+    //     (imgui.cpp L14441 LoadIniSettingsFromDisk) — hadi f RESTART.
+    //   - 5 s ba3d kol modification (window move / resize / tab reorder /
+    //     table resize) kay-KTEB-h   (imgui.cpp L14452 SaveIniSettingsToDisk)
+    //     — hadi f l-PLAY, hwa "dkchi kytsava".
+    // F ESign/iOS l-file kay-ysala7 (write interrupted mn l-app kill / partial
+    // write) w l-parse dyalo f restart kay-tri9 -> CRASH qbel mn ma l-panel
+    // yban kamel. n-3tqlo KAMEL:
+    //   io.IniFilename = NULL -> LA save LA load (ImGui manual mode;
+    //   WantSaveIniSettings kay-b9a true w kan-tgehdo, harmless).
+    // l-file l-qdim n-hiyedo bach ma-yqrah-ch abadan walou.
+    io.IniFilename = NULL;
+    ::unlink("imgui.ini"); // <unistd.h> (L48) — n-hiyed l-file l-qdim
 
    ImGui::StyleColorsClassic();
     auto& Style = ImGui::GetStyle();
