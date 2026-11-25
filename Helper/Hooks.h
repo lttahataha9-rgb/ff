@@ -3008,6 +3008,14 @@ void RunAutoMark00(float dt)
         g_am00RunT = 0.f;
     }
 
+    // user "DIK 7M ZADTIHA TAL Auto 00": aim 7 m ABOVE the enemy, same rule as
+    // Tele Mark / Auto Mark - never right on top of him. RADIUS 00 above still
+    // measures the RAW enemy position, so its meaning does not change; only the
+    // approach target (dx/dy/dz/dist) is lifted by 7 m here.
+    ep.y += 7.0f;
+    dx = ep.x - lp.x; dy = ep.y - lp.y; dz = ep.z - lp.z;
+    dist = sqrtf(dx * dx + dy * dy + dz * dz);
+
     // ---- approach phase: pos += dir * clamp(speed, 0, 0.05) ----
     Vars.Am00Dbg = 2;
     if (dist < 1.0f) { g_am00Act = false; g_am00Wait = 0.f; return; } // wsel
