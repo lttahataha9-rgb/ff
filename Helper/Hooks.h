@@ -41,6 +41,9 @@ struct Vars_t
     // ---- ported from Android EliteXzp (the "Elite" project) ----
     bool FlyOp = {};       // FLY OP (user snippet "FLY HACK OP"): +0.10 m/frame rise (iOS port)
     bool FlyJump = {};     // FLY JUMP (Elite HighJump): jump button held + lift ("ytl3ni")
+    bool FlyAuto = {};     // FLY AUTO (RIOSSM 261 "flyair"): smooth vertical rise + DELAY auto-off
+    float FlyAutoSpeed = 0.11f; // "SPEED AUTO" slider 0..0.5 (default 0.110)
+    float FlyAutoDelay = 1.8f;  // "DELAY AUTO" slider 0..10 s (default 1.8)
     bool StopTime = {};   // Speed Timer freeze: m_FixedDeltaTime -> 0.00001 ("stop time")
     bool TeleMark = {};   // Tele Mark: one-shot TP to my own map mark
     bool AutoMark = {};   // Auto TP to the mark at Fight start (phase==2) + 1.5 s pin
@@ -49,8 +52,13 @@ struct Vars_t
     bool DownKillV2 = {};  // DOWN KILL V2: smooth -0.4/f descent to -2.5 m, restore off
     bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
     bool UnderGround = {}; // UNDER GROUND: manual underground with surface camera
+    bool UnderKill = {};   // UNDER KILL (ported 1:1 from khokhan.dylib 0xefbc)
     bool AutoUnder = {};   // AUTO UNDER: auto-activates underground when round starts (phase == 2)
     float UgDepth = 2.5f;  // Underground depth in meters
+    bool UgAutoMark = {};  // Underground Auto Tele Mark (RIOSSM 261 position-lock ported ESign-safe)
+    float UgMarkDelay = 0.5f;   // Trigger duration & base period (seconds)
+    float UgVitground = 0.0f;   // Speed reduction on period (seconds)
+    float UgMarkYOffset = 1.6f; // Depth pushed below marked terrain
     bool AutoSky = {};     // AUTO SKY TP: teleport to rwida/mark -> auto return to current round safe-zone center in sky
     bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
 } Vars;
@@ -2200,6 +2208,154 @@ void RunFlyJump(float dt)
     Transform_SetPosition(tf, pos);
 }
 
+// ---- FLY AUTO (RIOSSM 261 "flyair" + __HOOK_DATA ZexisHook grounded hooks) ----
+static float g_faElapsed = 0.0f;
+static volatile bool g_faGroundedActive = false;
+static bool g_faHooksInstalled = false;
+static bool (*g_origCCIsGrounded)(void *) = nullptr;
+static bool (*g_origPhysCCTIsGrounded)(void *) = nullptr;
+
+static bool Hook_CC_get_isGrounded(void *self)
+{
+    if (g_faGroundedActive)
+        return true;
+    return g_origCCIsGrounded ? g_origCCIsGrounded(self) : false;
+}
+
+static bool Hook_PhysCCT_get_IsGrounded(void *self)
+{
+    if (g_faGroundedActive)
+        return true;
+    return g_origPhysCCTIsGrounded ? g_origPhysCCTIsGrounded(self) : false;
+}
+
+// RIOSSM 261 ZexisHook (0x82ac8): installs hook via UnityFramework's __HOOK_DATA
+// table (+0 = target_rva, +40 = orig_tramp_rva, +72 = hook_fn_ptr) with zero __TEXT write.
+static bool InstallZexisDataHook(uint64_t targetRva, void *hookFn, void **origOut)
+{
+    Dl_info info{};
+    if (!dladdr((void *)getRealOffset(0x8D6C1EC), &info) || !info.dli_fbase)
+        return false;
+
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)info.dli_fbase;
+    if (mh->magic != MH_MAGIC_64)
+        return false;
+
+    uint64_t textVmaddr = 0;
+    const struct segment_command_64 *hookDataSeg = nullptr;
+    const uint8_t *cmdPtr = (const uint8_t *)mh + sizeof(struct mach_header_64);
+    for (uint32_t i = 0; i < mh->ncmds; ++i)
+    {
+        const struct load_command *lc = (const struct load_command *)cmdPtr;
+        if (lc->cmd == LC_SEGMENT_64)
+        {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)cmdPtr;
+            if (seg->fileoff == 0 && seg->filesize != 0)
+                textVmaddr = seg->vmaddr;
+            if (strncmp(seg->segname, "__HOOK_DATA", 16) == 0)
+                hookDataSeg = seg;
+        }
+        cmdPtr += lc->cmdsize;
+    }
+
+    if (!hookDataSeg || hookDataSeg->vmsize < 88)
+        return false;
+
+    uintptr_t tableBase = (uintptr_t)mh + (uintptr_t)(hookDataSeg->vmaddr - textVmaddr);
+    size_t count = (size_t)(hookDataSeg->vmsize / 88);
+    for (size_t i = 0; i < count; ++i)
+    {
+        uint64_t *entry = (uint64_t *)(tableBase + i * 88);
+        uint64_t rva = entry[0];
+        if (rva == 0)
+            break;
+        if (rva == targetRva)
+        {
+            uint64_t origTrampRva = entry[5]; // +40
+            if (origOut && origTrampRva != 0)
+                *origOut = (void *)((uintptr_t)mh + (uintptr_t)(origTrampRva - textVmaddr));
+            entry[9] = (uint64_t)hookFn; // +72
+            return true;
+        }
+    }
+    return false;
+}
+
+static void EnsureFlyAutoHooksInstalled()
+{
+    if (g_faHooksInstalled)
+        return;
+    g_faHooksInstalled = true;
+    // RIOSSM 261 0x857c0 & 0x857e4:
+    //   0x08DF4F10 = CharacterController.get_isGrounded
+    //   0x06469184 = PhysicalCCT.get_IsGrounded
+    InstallZexisDataHook(0x08DF4F10ULL, (void *)&Hook_CC_get_isGrounded, (void **)&g_origCCIsGrounded);
+    InstallZexisDataHook(0x06469184ULL, (void *)&Hook_PhysCCT_get_IsGrounded, (void **)&g_origPhysCCTIsGrounded);
+}
+
+void RunFlyAuto(float dt)
+{
+    if (!Vars.FlyAuto)
+    {
+        g_faElapsed = 0.0f;
+        g_faGroundedActive = false;
+        return;
+    }
+    if (Vars.Flyingtest)
+    {
+        g_faGroundedActive = false;
+        return; // exclusive: FlyV2 owns Y
+    }
+
+    void *match = game_sdk->Curent_Match ? game_sdk->Curent_Match() : nullptr;
+    if (!match)
+    {
+        g_faElapsed = 0.0f;
+        g_faGroundedActive = false;
+        return;
+    }
+    void *local = game_sdk->GetLocalPlayer ? game_sdk->GetLocalPlayer(match) : nullptr;
+    if (!local || !game_sdk->get_MaxHP || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_faElapsed = 0.0f;
+        g_faGroundedActive = false;
+        return;
+    }
+    void *tf = game_sdk->Component_GetTransform ? game_sdk->Component_GetTransform(local) : nullptr;
+    if (!tf)
+    {
+        g_faGroundedActive = false;
+        return;
+    }
+
+    EnsureFlyAutoHooksInstalled();
+    g_faGroundedActive = true; // RIOSSM 261 [x21, #3361] = 1
+
+    Vector3 pos = game_sdk->get_position(tf);
+    if (pos == Vector3::zero())
+        return;
+
+    float step = (dt > 0.0f && dt < 0.25f) ? dt : 0.016f;
+    float speed = Vars.FlyAutoSpeed;
+    if (speed < 0.0f) speed = 0.0f;
+    if (speed > 0.5f) speed = 0.5f;
+
+    pos.y += speed * 60.0f * step;
+    Transform_SetPosition(tf, pos);
+
+    float delay = Vars.FlyAutoDelay;
+    if (delay < 0.0f) delay = 0.0f;
+    if (delay > 10.0f) delay = 10.0f;
+
+    g_faElapsed += step;
+    if (g_faElapsed >= delay)
+    {
+        g_faElapsed = 0.0f;
+        g_faGroundedActive = false;
+        Vars.FlyAuto = false; // self auto-off: floating switch snaps back to OFF
+    }
+}
+
 // ---- Stop Time (Elite: Speed Timer freeze) — SEPARATE again ---------------
 // "ywe9ef l'wa9t": TimeService.m_FixedDeltaTime -> 0.00001 (near freeze),
 // OFF -> restore the saved value (Elite restores 0.033).
@@ -2712,21 +2868,417 @@ void RunUnderGround()
 //   -> m_MapContentCtrl @ +0xA8 (UIMapContentController)
 //   -> m_LocalMapMarkController @ +0xF8 (UIHudPlayerMarkController)
 //   -> m_pos @ +0xB0 (Vector3 = my own map mark)
+// ---- MarkedLoc + RIOSSM 261 Auto Mark / Auto 00 (__HOOK_DATA 0x236BC70 & 0x5E25FC8 + 0x592B678 timer) ----
+static Vector3 g_riossmHookMark = Vector3::zero();
+static volatile bool g_riossmHasHookMark = false;
+static volatile bool g_riossmMarkTrig = false;   // RIOSSM #3136
+static volatile bool g_riossmAuto00Trig = false; // RIOSSM #2435
+static bool g_riossmMarkHooksInstalled = false;
+static void (*g_origMarkHook_236BC70)(void *, void *, void *, float, float, float, float, float, float) = nullptr;
+static void (*g_origRound00_5E25FC8)(void *) = nullptr;
+
+// RIOSSM 261 0x78234 (hook on RVA 0x0236BC70): captures map mark Vector3(s3, s4, s5)
+static void Hook_Mark_236BC70(void *a0, void *a1, void *a2,
+                              float s0, float s1, float s2,
+                              float s3, float s4, float s5)
+{
+    if (s3 != 0.0f || s4 != 0.0f || s5 != 0.0f)
+    {
+        g_riossmHookMark = Vector3(s3, s4, s5);
+        g_riossmHasHookMark = true;
+    }
+    else
+    {
+        g_riossmHasHookMark = false;
+    }
+    if (g_origMarkHook_236BC70)
+        g_origMarkHook_236BC70(a0, a1, a2, s0, s1, s2, s3, s4, s5);
+}
+
+// RIOSSM 261 0x77df4 (hook on RVA 0x05E25FC8): fires at round 00 transition
+static void Hook_Round00_5E25FC8(void *self)
+{
+    if (Vars.AutoMark)
+        g_riossmMarkTrig = true;
+    if (Vars.UgAutoMark)
+        g_riossmAuto00Trig = true;
+    if (g_origRound00_5E25FC8)
+        g_origRound00_5E25FC8(self);
+}
+
+static void EnsureRiossmMarkHooksInstalled()
+{
+    if (g_riossmMarkHooksInstalled)
+        return;
+    g_riossmMarkHooksInstalled = true;
+    InstallZexisDataHook(0x0236BC70ULL, (void *)&Hook_Mark_236BC70, (void **)&g_origMarkHook_236BC70);
+    InstallZexisDataHook(0x05E25FC8ULL, (void *)&Hook_Round00_5E25FC8, (void **)&g_origRound00_5E25FC8);
+}
+
 static Vector3 MarkedLoc()
 {
+    EnsureRiossmMarkHooksInstalled();
     void *scene = GetInGameUIScene(); // GameFacade.CurrentInGameUIScene 0x5918DB4
-    if (!scene)
-        return Vector3::zero();
-    void *bigMap = *(void **)((uintptr_t)scene + oxo("0x458"));
-    if (!bigMap)
-        return Vector3::zero();
-    void *mapContent = *(void **)((uintptr_t)bigMap + oxo("0xA8"));
-    if (!mapContent)
-        return Vector3::zero();
-    void *markCtrl = *(void **)((uintptr_t)mapContent + oxo("0xF8"));
-    if (!markCtrl)
-        return Vector3::zero();
-    return *(Vector3 *)((uintptr_t)markCtrl + oxo("0xB0"));
+    if (scene)
+    {
+        void *bigMap = *(void **)((uintptr_t)scene + oxo("0x458"));
+        void *mapContent = bigMap ? *(void **)((uintptr_t)bigMap + oxo("0xA8")) : nullptr;
+        void *markCtrl = mapContent ? *(void **)((uintptr_t)mapContent + oxo("0xF8")) : nullptr;
+        if (markCtrl)
+        {
+            Vector3 uiMark = *(Vector3 *)((uintptr_t)markCtrl + oxo("0xB0"));
+            if (uiMark != Vector3::zero())
+            {
+                g_riossmHookMark = uiMark;
+                g_riossmHasHookMark = true;
+                return uiMark;
+            }
+        }
+    }
+    if (g_riossmHasHookMark && g_riossmHookMark != Vector3::zero())
+        return g_riossmHookMark;
+    return Vector3::zero();
+}
+
+// RIOSSM 261 0x77438 + 0x7c014 + 0x78284:
+//   - Tracks round countdown via RVA 0x0592B678 (24.29s countdown - Vars.UgVitground)
+//   - Also triggered by __HOOK_DATA RVA 0x05E25FC8 at 00
+//   - Teleports to Vector3(mark.x, mark.y + 0.06f, mark.z) for 0.60s at 00, then stops cleanly!
+static float g_r261CountdownElapsed = 0.0f;
+static bool g_r261CountdownFired = false;
+static bool g_r261PrevPrepare = false;
+static uint32_t g_r261FrameCount = 0;
+static uint32_t g_r261LastResetFrame = 0;
+static float g_r261HoldElapsed = 0.0f;
+static uint64_t g_r261LastTickUs = 0;
+
+static float RiossmStepDt()
+{
+    uint64_t nowUs = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+    float dt = 0.016f;
+    if (g_r261LastTickUs != 0 && nowUs > g_r261LastTickUs)
+    {
+        dt = (float)(nowUs - g_r261LastTickUs) / 1000000.0f;
+        if (dt <= 0.0f || dt > 0.25f)
+            dt = 0.016f;
+    }
+    g_r261LastTickUs = nowUs;
+    return dt;
+}
+
+void RunUndergroundAutoMark()
+{
+    EnsureRiossmMarkHooksInstalled();
+
+    void *m = game_sdk->Curent_Match ? game_sdk->Curent_Match() : nullptr;
+    void *local = (m && game_sdk->GetLocalPlayer) ? game_sdk->GetLocalPlayer(m) : nullptr;
+    void *tf = (local && game_sdk->Component_GetTransform) ? game_sdk->Component_GetTransform(local) : nullptr;
+    if (!m || !local || !tf || !game_sdk->get_MaxHP || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_r261CountdownElapsed = 0.0f;
+        g_r261CountdownFired = false;
+        g_r261PrevPrepare = false;
+        g_r261HoldElapsed = 0.0f;
+        g_riossmMarkTrig = false;
+        g_riossmAuto00Trig = false;
+        return;
+    }
+
+    float dt = RiossmStepDt();
+    g_r261FrameCount++;
+
+    // RIOSSM 261 0x77438: resolve & call RVA 0x0592B678 to detect round countdown start
+    static bool (*fnIsPrepare_592B678)() = nullptr;
+    static bool s_tried592B678 = false;
+    if (!s_tried592B678)
+    {
+        s_tried592B678 = true;
+        void *cand = (void *)getRealOffset(oxo("0x592B678"));
+        Dl_info goodInfo{}, candInfo{};
+        if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+            dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase == goodInfo.dli_fbase)
+        {
+            fnIsPrepare_592B678 = (bool (*)())cand;
+        }
+    }
+
+    bool inPrepare = fnIsPrepare_592B678 ? fnIsPrepare_592B678() : false;
+    g_r261CountdownElapsed += dt;
+    if (inPrepare && !g_r261PrevPrepare && (g_r261FrameCount - g_r261LastResetFrame) >= 30)
+    {
+        g_r261CountdownElapsed = 0.0f;
+        g_r261CountdownFired = false;
+        g_r261LastResetFrame = g_r261FrameCount;
+    }
+    g_r261PrevPrepare = inPrepare;
+
+    if (!Vars.AutoMark && !Vars.UgAutoMark)
+    {
+        g_riossmMarkTrig = false;
+        g_riossmAuto00Trig = false;
+        g_r261HoldElapsed = 0.0f;
+        return;
+    }
+
+    if ((game_sdk->get_IsDieing && game_sdk->get_IsDieing(local)) || game_sdk->GetHp(local) <= 0)
+    {
+        g_riossmMarkTrig = false;
+        g_riossmAuto00Trig = false;
+        g_r261HoldElapsed = 0.0f;
+        return;
+    }
+
+    // RIOSSM 261 0x7c014..0x7c0ac: fire at (24.29f - vit) right before 00!
+    float vit = (Vars.UgVitground >= 0.0f && Vars.UgVitground <= 2.0f) ? Vars.UgVitground : 0.02f;
+    float targetTime = 24.29f - vit;
+    if (targetTime < 0.01f)
+        targetTime = 0.01f;
+
+    if (inPrepare && g_r261CountdownElapsed >= targetTime && !g_r261CountdownFired)
+    {
+        g_r261CountdownFired = true;
+        if (Vars.AutoMark)
+            g_riossmMarkTrig = true;
+        if (Vars.UgAutoMark)
+            g_riossmAuto00Trig = true;
+        g_r261HoldElapsed = 0.0f;
+    }
+
+    // RIOSSM 261 0x78284..0x78398: when triggered at 00, move to Vector3(mark.x, mark.y + 0.06f, mark.z)
+    if (!g_riossmMarkTrig && !g_riossmAuto00Trig)
+    {
+        g_r261HoldElapsed = 0.0f;
+        return;
+    }
+
+    Vector3 mark = MarkedLoc();
+    if (mark == Vector3::zero())
+    {
+        g_riossmMarkTrig = false;
+        g_riossmAuto00Trig = false;
+        g_r261HoldElapsed = 0.0f;
+        return;
+    }
+
+    g_r261HoldElapsed += dt;
+    Vector3 dst(mark.x, mark.y + 0.06f, mark.z);
+    Transform_SetPosition(tf, dst);
+
+    if (g_r261HoldElapsed >= 0.60f)
+    {
+        g_riossmMarkTrig = false;
+        g_riossmAuto00Trig = false;
+        g_r261HoldElapsed = 0.0f;
+    }
+}
+
+// ---- UNDER KILL (Ported 1:1 from khokhan.dylib 0xefbc + 0xf674..0xf8b0) -----
+//   - Writes localPlayer + 0x80C = Vars.UnderKill
+//   - Shifts camera Y by -5.0m once on activation (restores to g_ukOrigCamY on OFF)
+//   - Sinks localPlayer to g_ukOrigLocalY - 3.0m (threshold 0.1m; restores on OFF)
+//   - Sinks alive enemies within 4.5m vertical to origEnemyY - 1.7m (threshold 0.5m)
+//     and calls Transform.Rotate(enemyTF, 180.0f, 0.0f, 0.0f) (RVA 0x08D6DBB8)
+//   - Restores all enemies to their saved surface Y when toggled OFF
+static bool g_ukCamShifted = false;
+static float g_ukOrigCamY = 0.0f;
+static float g_ukOrigLocalY = 0.0f;
+static void *g_ukLastMatch = nullptr;
+static void *g_ukLastLocal = nullptr;
+static std::map<void *, float> g_ukEnemyOrigY;
+
+void RunUnderKill()
+{
+    void *match = game_sdk->Curent_Match ? game_sdk->Curent_Match() : nullptr;
+    void *local = (match && game_sdk->GetLocalPlayer) ? game_sdk->GetLocalPlayer(match) : nullptr;
+    if (!match || !local || !game_sdk->get_MaxHP || game_sdk->get_MaxHP(local) <= 0)
+    {
+        g_ukCamShifted = false;
+        g_ukOrigCamY = 0.0f;
+        g_ukOrigLocalY = 0.0f;
+        g_ukLastMatch = nullptr;
+        g_ukLastLocal = nullptr;
+        g_ukEnemyOrigY.clear();
+        return;
+    }
+
+    // khokhan.dylib 0xf678..0xf67c: *(uint8_t *)(localPlayer + 2060) = Vars.UnderKill
+    *(uint8_t *)((uintptr_t)local + 0x80C) = Vars.UnderKill ? 1 : 0;
+
+    if (!Vars.UnderKill)
+    {
+        if (g_ukCamShifted)
+        {
+            g_ukCamShifted = false;
+
+            // Restore camera Y (khokhan.dylib 0xf698..0xf6f4)
+            void *cam = game_sdk->get_camera ? game_sdk->get_camera() : nullptr;
+            void *camTF = (cam && game_sdk->Component_GetTransform) ? game_sdk->Component_GetTransform(cam) : nullptr;
+            if (camTF)
+            {
+                Vector3 cp = game_sdk->get_position(camTF);
+                if (cp != Vector3::zero())
+                {
+                    cp.y = (fabsf(g_ukOrigCamY) > 0.001f) ? g_ukOrigCamY : (cp.y + 5.0f);
+                    Transform_SetPosition(camTF, cp);
+                }
+            }
+
+            // Restore local player Y (khokhan.dylib 0xf724..0xf788)
+            void *localTF = game_sdk->Component_GetTransform ? game_sdk->Component_GetTransform(local) : nullptr;
+            if (localTF && fabsf(g_ukOrigLocalY) > 0.001f)
+            {
+                Vector3 lp = game_sdk->get_position(localTF);
+                if (lp != Vector3::zero())
+                {
+                    lp.y = g_ukOrigLocalY;
+                    Transform_SetPosition(localTF, lp);
+                }
+            }
+            g_ukOrigLocalY = 0.0f;
+
+            // Restore all shifted enemies Y (khokhan.dylib 0xf78c..0xf884)
+            Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((uintptr_t)match + oxo("0x148"));
+            if (players)
+            {
+                for (int i = 0; i < players->getSize(); ++i)
+                {
+                    void *enemy = players->getValues()[i];
+                    if (!enemy || enemy == local)
+                        continue;
+                    auto it = g_ukEnemyOrigY.find(enemy);
+                    if (it == g_ukEnemyOrigY.end() || fabsf(it->second) <= 0.001f)
+                        continue;
+                    void *enemyTF = game_sdk->Component_GetTransform(enemy);
+                    if (!enemyTF)
+                        continue;
+                    Vector3 ep = game_sdk->get_position(enemyTF);
+                    if (ep != Vector3::zero())
+                    {
+                        ep.y = it->second;
+                        Transform_SetPosition(enemyTF, ep);
+                    }
+                }
+            }
+            g_ukEnemyOrigY.clear();
+            g_ukOrigCamY = 0.0f;
+        }
+        return;
+    }
+
+    // Reset state if match or localPlayer changed (khokhan.dylib 0xf0c0..0xf11c)
+    if (match != g_ukLastMatch || local != g_ukLastLocal)
+    {
+        g_ukEnemyOrigY.clear();
+        g_ukOrigLocalY = 0.0f;
+        g_ukCamShifted = false;
+        g_ukLastMatch = match;
+        g_ukLastLocal = local;
+    }
+
+    if ((game_sdk->get_IsDieing && game_sdk->get_IsDieing(local)) || game_sdk->GetHp(local) <= 0)
+        return;
+
+    void *localTF = game_sdk->Component_GetTransform ? game_sdk->Component_GetTransform(local) : nullptr;
+    if (!localTF)
+        return;
+
+    // 1) Shift camera Y by -5.0m once (khokhan.dylib 0xf154..0xf1ac)
+    if (!g_ukCamShifted)
+    {
+        void *cam = game_sdk->get_camera ? game_sdk->get_camera() : nullptr;
+        void *camTF = (cam && game_sdk->Component_GetTransform) ? game_sdk->Component_GetTransform(cam) : nullptr;
+        if (camTF)
+        {
+            Vector3 cp = game_sdk->get_position(camTF);
+            if (cp != Vector3::zero())
+            {
+                g_ukOrigCamY = cp.y;
+                cp.y -= 5.0f;
+                Transform_SetPosition(camTF, cp);
+                g_ukCamShifted = true;
+            }
+        }
+    }
+
+    // 2) Sink localPlayer to g_ukOrigLocalY - 3.0m (khokhan.dylib 0xf1b0..0xf21c)
+    Vector3 lp = game_sdk->get_position(localTF);
+    if (lp != Vector3::zero())
+    {
+        if (g_ukOrigLocalY == 0.0f)
+            g_ukOrigLocalY = lp.y;
+        float targetLocalY = g_ukOrigLocalY - 3.0f;
+        if (fabsf(lp.y - targetLocalY) > 0.1f)
+        {
+            lp.y = targetLocalY;
+            Transform_SetPosition(localTF, lp);
+        }
+    }
+
+    // 3) Sink alive enemies to origEnemyY - 1.7m and rotate 180 deg (khokhan.dylib 0xf220..0xf414)
+    static void (*fnTransformRotate)(void *, float, float, float) = nullptr;
+    static bool s_triedRotate = false;
+    if (!s_triedRotate)
+    {
+        s_triedRotate = true;
+        void *cand = (void *)getRealOffset(oxo("0x8D6DBB8"));
+        Dl_info goodInfo{}, candInfo{};
+        if (cand && dladdr((void *)getRealOffset(0x8D6C1EC), &goodInfo) &&
+            dladdr(cand, &candInfo) && goodInfo.dli_fbase && candInfo.dli_fbase == goodInfo.dli_fbase)
+        {
+            fnTransformRotate = (void (*)(void *, float, float, float))cand;
+        }
+    }
+
+    Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((uintptr_t)match + oxo("0x148"));
+    if (!players)
+        return;
+
+    for (int i = 0; i < players->getSize(); ++i)
+    {
+        void *enemy = players->getValues()[i];
+        if (!enemy || enemy == local)
+            continue;
+        void *enemyTF = game_sdk->Component_GetTransform(enemy);
+        if (!enemyTF)
+            continue;
+        if (!game_sdk->get_isVisible(enemy))
+            continue;
+        if (game_sdk->get_IsDieing(enemy))
+            continue;
+        if (game_sdk->GetHp(enemy) < 1)
+            continue;
+        if (game_sdk->get_isLocalTeam(enemy))
+            continue;
+
+        Vector3 ep = game_sdk->get_position(enemyTF);
+        if (ep == Vector3::zero())
+            continue;
+
+        auto it = g_ukEnemyOrigY.find(enemy);
+        if (it == g_ukEnemyOrigY.end())
+        {
+            if (fabsf(ep.y - g_ukOrigLocalY) < 4.5f)
+            {
+                g_ukEnemyOrigY[enemy] = ep.y;
+                it = g_ukEnemyOrigY.find(enemy);
+            }
+        }
+        if (it != g_ukEnemyOrigY.end())
+        {
+            float targetEnemyY = it->second - 1.7f;
+            if (fabsf(ep.y - targetEnemyY) > 0.5f)
+            {
+                ep.y = targetEnemyY;
+                Transform_SetPosition(enemyTF, ep);
+            }
+        }
+        if (fnTransformRotate)
+        {
+            fnTransformRotate(enemyTF, 180.0f, 0.0f, 0.0f);
+        }
+    }
 }
 
 // ---- RESET GUEST (Elite "Reset Guest" switch parity) -------------------------
@@ -3200,49 +3752,9 @@ void RunMarkTP()
         return;
     }
 
-    // ---- Auto Mark (when AutoSky is OFF, classic 1500ms pin on mark) ----
-    if (!Vars.AutoMark)
-    {
-        g_amFired = false;
-        g_amPin = false;
-        return;
-    }
-    if (phase != 2)
-        return;
-    if (!g_amFired)
-    {
-        Vector3 mark = MarkedLoc();
-        if (mark != Vector3::zero() && TeleportToMark(mark))
-        {
-            g_amFired = true;
-            g_amTarget = mark;
-            g_amPin = true;
-            g_amStart = std::chrono::steady_clock::now();
-        }
-        return;
-    }
-    g_markDbg |= 2;
-    if (g_amPin)
-    {
-        long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - g_amStart)
-                           .count();
-        if (ms >= 1500)
-            g_amPin = false;
-        else
-        {
-            void *match = game_sdk->Curent_Match();
-            void *local = match ? game_sdk->GetLocalPlayer(match) : nullptr;
-            void *tf = local ? game_sdk->Component_GetTransform(local) : nullptr;
-            if (tf)
-            {
-                Vector3 pin = g_amTarget;
-                pin.y += 1.5f;
-                Transform_SetPosition(tf, pin);
-            }
-            g_markDbg |= 4;
-        }
-    }
+    // Auto Mark & Auto 00 are now driven at 00 by RunUndergroundAutoMark() (RIOSSM 261 0x78284 + 0x5E25FC8 + 0x236BC70 + 0x592B678)
+    g_amFired = false;
+    g_amPin = false;
 }
 
 // ---- SmartCoverKill (Elite SmartCoverKillv2 - the AimKill "cover") ----------
@@ -3394,6 +3906,8 @@ struct AimkillApi {
     uint32_t (*playerIDToUint)(COW_GamePlay_IHAAMHPPLMG_o);
     void *(*packVector3)(Vector3);
     void *(*packQuaternion)(FFQuat);
+    FFQuat (*getAimRotation)(void *);
+    void  (*setAimRotation)(void *, FFQuat, bool);
     float (*realtimeSinceStartup)();
     bool  (*gameFacadeSend)(uint32_t, void *, uint8_t, bool);
 };
@@ -3419,6 +3933,8 @@ static void InitApi() {
     api.playerIDToUint       = (decltype(api.playerIDToUint))       getRealOffset(OFF_Zexis_PlayerIDToUint);
     api.packVector3          = (decltype(api.packVector3))          getRealOffset(OFF_Zexis_PackVector3);
     api.packQuaternion       = (decltype(api.packQuaternion))       getRealOffset(0x3715ED4);
+    api.getAimRotation       = (decltype(api.getAimRotation))       getRealOffset(0x5624594);
+    api.setAimRotation       = (decltype(api.setAimRotation))       getRealOffset(0x5636F80);
     api.realtimeSinceStartup = (decltype(api.realtimeSinceStartup)) getRealOffset(OFF_Zexis_RealtimeSinceStartup);
     api.gameFacadeSend       = (decltype(api.gameFacadeSend))       getRealOffset(OFF_Zexis_GameFacade_Send);
     apiReady = true;
@@ -3572,9 +4088,24 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
     pkt->ArmorRatio         = 1.f;
     pkt->ExtraFlag          = 0;
     pkt->ForceNoHeadShot    = false;
-    pkt->IsPlayerBackArea   = true;
+    pkt->IsPlayerBackArea   = false;
     pkt->BaseTime           = api.realtimeSinceStartup();
     if (!pkt->FirePos || !pkt->TargetPos) return;
+
+    // ESign-safe 360 aim focus: save local aim rotation, temporarily point Player at target
+    // for startFiring / getAimingEntity / buildCheckParams, send 0x7E0 + 106 + 108, then restore.
+    FFQuat savedAimRot{0.f, 0.f, 0.f, 1.f};
+    bool hasSavedAim = false;
+    if (api.getAimRotation && api.setAimRotation) {
+        Vector3 diff = t.head - origin;
+        if ((diff.x * diff.x + diff.y * diff.y + diff.z * diff.z) >= 0.0001f) {
+            savedAimRot = api.getAimRotation(local);
+            Quaternion aimRot = Quaternion::LookRotation(diff, Vector3(0, 1, 0));
+            FFQuat targetQ = {aimRot.x, aimRot.y, aimRot.z, aimRot.w};
+            api.setAimRotation(local, targetQ, true);
+            hasSavedAim = true;
+        }
+    }
 
     // RIOSSM 0x000a2390..0x000a2524 exact order:
     // StartFiring -> SendRot7E0(0x7E0) -> GetAimingEntity -> BuildCheckParams -> WeaponDoSomething -> Send(106) -> Send(108) -> StopFire
@@ -3584,6 +4115,7 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
     void *checkParams  = api.buildCheckParams(weapon, t.enemy, headCollider, false, nullptr);
     if (!checkParams || *(int32_t *)((uintptr_t)checkParams + 0x18) <= 0) {
         api.stopFire(local, weapon);
+        if (hasSavedAim) api.setAimRotation(local, savedAimRot, true);
         aikDbgSt = 12;
         return;
     }
@@ -3597,6 +4129,7 @@ static void SendTakeDamage(void *local, void *weapon, const TargetCtx &t,
     // RIOSSM 0x000a2498..0x000a2500: send 108 reload/swap packet while enemy alive before StopFire
     Send108(local, t.enemy);
     api.stopFire(local, weapon);
+    if (hasSavedAim) api.setAimRotation(local, savedAimRot, true);
     aik.ResetSwapTime(local);
     (void)aimingEntity;
 }
@@ -3735,8 +4268,6 @@ static void *NewReloadPacket() {
 
 static bool Send108(void *local, void *enemy) {
     if (!Vars.AimKillSend || !local || !enemy) return false;
-    // cover/LOS gates REMOVED (user: "hyd mnha l'cover") — the 108 swap sync
-    // goes with every strike, through cover
 
     auto getWeaponOnHand = (void *(*)(void *))getRealOffset(OFF_Zexis_GetWeaponOnHand);
     auto getItemDataID = (int (*)(void *))getRealOffset(OFF_Zexis_GetItemDataID);

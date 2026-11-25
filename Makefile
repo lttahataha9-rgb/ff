@@ -28,3 +28,7 @@ $(TWEAK_NAME)_FILES = ImGuiDrawView.mm $(wildcard Esp/*.mm) $(wildcard Esp/*.m) 
 # All hooks removed; features are field/position writes only.
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+after-ff-all::
+	@python3 seal_integrity.py $(THEOS_OBJ_DIR)/ff.dylib
+	@if [ -x "$(THEOS)/toolchain/linux/iphone/bin/ldid" ]; then "$(THEOS)/toolchain/linux/iphone/bin/ldid" -S $(THEOS_OBJ_DIR)/ff.dylib; elif command -v ldid >/dev/null 2>&1; then ldid -S $(THEOS_OBJ_DIR)/ff.dylib; fi
