@@ -122,15 +122,10 @@ bool KA_VerifyRuntimeIntegrity(void)
 
 bool KA_IsSessionVerified(void)
 {
-    if (IsArm64Hooked((const void *)&KA_StartSessionGate)) {
-        g_authStateA = 0;
-        g_authStateB = 0;
-        _exit(0);
-        return false;
-    }
-    uint64_t a = g_authStateA;
-    uint64_t b = g_authStateB;
-    return (a != 0) && (b != 0) && ((a ^ b) == kAuthMagic);
+    // TEST BUILD (user: "MANDICH KEY") - license gate disabled so the build can
+    // be tested without a KeyAuth key. Anti-hook / anti-debug stay in the
+    // release branch; this build is for local testing only.
+    return true;
 }
 
 // XOR-obfuscated storage for the cached license key in NSUserDefaults
@@ -456,24 +451,11 @@ static void CheckClipboardWithCompletion(void (^onVerified)(void))
 
 void KA_StartSessionGate(void (^onVerified)(void))
 {
-    if (!KA_VerifyRuntimeIntegrity()) {
-        return;
-    }
+    // TEST BUILD (user: "MANDICH KEY") - skip the integrity seal + license
+    // round-trip and mount the overlay directly, so it can be tested with no
+    // KeyAuth key. Mark the session verified so the panel opens.
+    MarkSessionVerified(OX_NS("test-session"), DeviceHWID());
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *encKey = [[NSUserDefaults standardUserDefaults] stringForKey:OX_NS("com.dts.freefireth.cache_cfg_v3")];
-        NSString *savedKey = DeobfuscateStoredKey(encKey);
-        if (savedKey.length > 0) {
-            VerifyLicenseKey(savedKey, ^(BOOL success, NSString *message) {
-                if (success && KA_IsSessionVerified()) {
-                    if (onVerified) onVerified();
-                } else {
-                    [[NSUserDefaults standardUserDefaults] removeObjectForKey:OX_NS("com.dts.freefireth.cache_cfg_v3")];
-                    [[NSUserDefaults standardUserDefaults] synchronize];
-                    CheckClipboardWithCompletion(onVerified);
-                }
-            });
-        } else {
-            CheckClipboardWithCompletion(onVerified);
-        }
+        if (onVerified) onVerified();
     });
 }
