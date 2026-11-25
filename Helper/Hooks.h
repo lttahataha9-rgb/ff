@@ -2790,21 +2790,21 @@ void RunResetGuest()
 // "filet de securite: jamais bloque en glide" safety clears). Holding the
 // spoof true for 500 ms makes the game run fold-wing-glide logic
 // (movement/camera/state machine) with NO real glide started -> CRASH.
-// FIX: no hook, no spoof at all — the +15 m is held by the plain per-frame pin
+// FIX: no hook, no spoof at all — the +7 m is held by the plain per-frame pin
 // below (same mechanism as Auto Mark's proven 1.5 s pin, never crashed), and
 // the teleport itself worked WITHOUT any spoof before the 7 m change
 // (430e8d2) — the pin re-asserts the position every frame anyway.
 
-// shared +15 m pin (Tele Mark): hold the arrival spot for
+// shared +7 m pin (Tele Mark): hold the arrival spot for
 // 500 ms (PLAIN Transform_SetPosition, NO spoof — crash fix) so clamp /
-// knockback cannot eat the 15 m, then release -> the game drops us ON the mark
+// knockback cannot eat the 7 m, then release -> the game drops us ON the mark
 // (user: "ay blas n teleporta liha khaso ytipini fou9ha b 7 m").
 static bool g_tpPin = false;
 static Vector3 g_tpPinPos;
 static std::chrono::steady_clock::time_point g_tpPinStart;
 
 // ---- TeleportToMark (Elite ExecuteTeleMark sequence) ------------------------
-// hop +50 then arrive exactly +15 m above the target (mark), HOLD 500 ms with
+// hop +50 then arrive exactly +7 m above the target (mark), HOLD 500 ms with
 // the plain pin, then release -> drop onto the mark. NO glide spoof (crash fix).
 static bool TeleportToMark(Vector3 target)
 {
@@ -2824,9 +2824,9 @@ static bool TeleportToMark(Vector3 target)
     up.y += 50.0f;
     Transform_SetPosition(tf, up); // Elite: hop first (anti ground-clamp)
     Vector3 dst = target;
-    dst.y += 15.0f; // user: +7 m -> +15 m (Tele Mark / Auto Mark share this)
+    dst.y += 7.0f; // user: +15 m -> +7 m (Tele Mark / Auto Mark share this)
     Transform_SetPosition(tf, dst);
-    g_tpPin = true; // hold +15 m for 500 ms, then drop onto the mark
+    g_tpPin = true; // hold +7 m for 500 ms, then drop onto the mark
     g_tpPinPos = dst;
     g_tpPinStart = std::chrono::steady_clock::now();
     return true;
@@ -2835,7 +2835,7 @@ static bool TeleportToMark(Vector3 target)
 // ---- RunMarkTP: Tele Mark (manual one-shot) + Auto Mark (Fight gate) --------
 // Tele Mark: check -> one TP to my map mark; no mark -> auto-uncheck (Elite
 // auto-clears too).  Auto Mark (RESTORED, user "Rj33-ha m3a l-hop"): ECSMatchPhase
-// == 2 once per round -> TP to the mark + pin 1500 ms AT +15 m, then drop onto
+// == 2 once per round -> TP to the mark + pin 1500 ms AT +7 m, then drop onto
 // the mark (Elite AutoEnableTPOnPhase2 + ExecuteGliderMarkTP).
 // g_markDbg bits: 1 = tele done / 2 = auto fired / 4 = pin active.
 static bool g_tmDone = false;
@@ -2848,7 +2848,7 @@ void RunMarkTP()
 {
     g_markDbg = 0;
 
-    // shared +15 m pin: hold the TP arrival (Tele Mark) for
+    // shared +7 m pin: hold the TP arrival (Tele Mark) for
     // 500 ms with PLAIN position sets (NO glide spoof — crash fix), then
     // release -> normal physics drop us ON the mark
     if (g_tpPin)
@@ -2858,7 +2858,7 @@ void RunMarkTP()
                              .count();
         if (tpMs >= 500)
         {
-            g_tpPin = false; // pin off -> fall the last 15 m
+            g_tpPin = false; // pin off -> fall the last 7 m
         }
         else
         {
@@ -2866,7 +2866,7 @@ void RunMarkTP()
             void *tpLocal = tpMatch ? game_sdk->GetLocalPlayer(tpMatch) : nullptr;
             void *tpTf = tpLocal ? game_sdk->Component_GetTransform(tpLocal) : nullptr;
             if (tpTf)
-                Transform_SetPosition(tpTf, g_tpPinPos); // glued at +15 m
+                Transform_SetPosition(tpTf, g_tpPinPos); // glued at +7 m
         }
     }
 
@@ -2887,8 +2887,8 @@ void RunMarkTP()
         g_markDbg |= 1;
 
     // ---- Auto Mark (Elite AutoEnableTPOnPhase2) — RESTORED (user "Rj33-ha") ----
-    // phase==2 (Fight) once per round -> TP to my mark + hold 1500 ms AT +15 m
-    // (hop l-jdid: 7 m -> 15 m, user "dik 7 m ... raddha 15 m"), then drop.
+    // phase==2 (Fight) once per round -> TP to my mark + hold 1500 ms AT +7 m
+    // (hop rja3 l-asl: 15 m -> 7 m, user "BRITO YTELEPORTINI FOU9HA B 7 M"), then drop.
     if (!Vars.AutoMark)
     {
         g_amFired = false;
@@ -2931,8 +2931,8 @@ void RunMarkTP()
             if (amTf)
             {
                 Vector3 pin = g_amTarget;
-                pin.y += 15.0f; // user: 7 m -> 15 m
-                Transform_SetPosition(amTf, pin); // glued at +15 m (anti-knockback)
+                pin.y += 7.0f; // user: 15 m -> 7 m
+                Transform_SetPosition(amTf, pin); // glued at +7 m (anti-knockback)
             }
             g_markDbg |= 4;
         }

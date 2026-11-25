@@ -700,7 +700,7 @@ ImFont* Urbanist;
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
                         ImGui::TextDisabled("AIMKILL / Telekill / Down Cover");
                         ImGui::TextDisabled("AIMKILL = msg 106 + 108, damage = dm l-3douwwa");
-                        ImGui::TextDisabled("+15 m hop: Tele Mark / Auto Mark / Telekill");
+                        ImGui::TextDisabled("+7 m hop: Tele Mark / Auto Mark (Telekill +15 m)");
                         ImGui::Spacing();
                         ImGui::Checkbox("RESET GUEST (unlock game option)", &Vars.ResetGuest);
                         if (g_rgState == 1)
