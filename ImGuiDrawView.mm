@@ -78,8 +78,8 @@ static UIWindow *SafeHostWindow(void)
 // RIOSSM port (user: "THYD 360 W SEND W AUTO MARK" + "TZID AUTO MARK 00 W KILL 360"
 // + "TRD LYA L AUTO MARK KIF MA KAN"): Send / 360 mchaw, AUTO MARK 00 + KILL 360
 // zado, w Auto Mark l-9dima RJA3T (user: "Rj33-ha m3a l-hop (7 -> 15)").
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_JUFLY = 5, FLTBTN_TELEMARK = 6, FLTBTN_AUTOMARK = 7, FLTBTN_DOWNCOVER = 8, FLTBTN_GHOST = 9, FLTBTN_FLYAUTO = 10, FLTBTN_AIMKILL = 11, FLTBTN_COUNT = 12 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_STOPTIME = 3, FLTBTN_FLYOP = 4, FLTBTN_JUFLY = 5, FLTBTN_TELEMARK = 6, FLTBTN_AUTOMARK = 7, FLTBTN_DOWNCOVER = 8, FLTBTN_GHOST = 9, FLTBTN_FLYAUTO = 10, FLTBTN_AIMKILL = 11, FLTBTN_AUTOSWAP = 12, FLTBTN_COUNT = 13 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -123,6 +123,7 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(1.00f, 0.35f, 0.70f, 1.00f), // FLYAUTO  - wardi (pink, fly family — RIOSSM FLYAUTO)
     // ---- loun RIOSSM ----
     ImVec4(0.00f, 0.85f, 1.00f, 1.00f), // AIMKILL    - cyan (zexisyy 106 + 108)
+    ImVec4(1.00f, 0.75f, 0.10f, 1.00f), // AUTOSWAP  - asfar (weapon swap, Elite port)
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -523,8 +524,7 @@ ImFont* Urbanist;
                 case FLTBTN_FLYOP:
                     DrawFloatingButton(i, oxorany("Fly Op"), &Vars.FlyOp);
                     break;
-                case FLTBTN_JUFLY:
-                    DrawFloatingButton(i, oxorany("JU FLY"), &Vars.JuFly);
+                case FLTBTN_JUFLY: // JU FLY option REMOVED (user) — slot kept for index alignment
                     break;
                 case FLTBTN_TELEMARK:
                     DrawFloatingButton(i, oxorany("Tele Mark"), &Vars.TeleMark);
@@ -540,6 +540,9 @@ ImFont* Urbanist;
                     break;
                 case FLTBTN_FLYAUTO:
                     DrawFloatingButton(i, oxorany("FLYAUTO"), &Vars.FlyAuto); // RIOSSM label
+                    break;
+                case FLTBTN_AUTOSWAP:
+                    DrawFloatingButton(i, oxorany("AUTO SWAP"), &Vars.AutoSwap);
                     break;
                 }
             }
@@ -635,11 +638,6 @@ ImFont* Urbanist;
                             if (ImGui::Checkbox(oxorany("Fly Op"), &Vars.FlyOp))
                                 gFltShow[FLTBTN_FLYOP] = Vars.FlyOp; // panel = latch dyal l'button f ecran
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("JU FLY"), &Vars.JuFly))
-                                gFltShow[FLTBTN_JUFLY] = Vars.JuFly;
-                            if (Vars.JuFly)
-                                ImGui::TextDisabled("JU FLY: %d/3 grounded getters patched", g_gndPatched);
-                            ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
@@ -659,6 +657,9 @@ ImFont* Urbanist;
                         if (ImGui::Checkbox(oxorany("Button FLYAUTO"), &Vars.FlyAuto)) gFltShow[FLTBTN_FLYAUTO] = Vars.FlyAuto;
                         ImGui::SliderFloat(oxorany("SPEED AUTO"), &Vars.FlyAutoSpeed, 0.0f, 0.5f, "%.2f v"); // RIOSSM: 0..0.5, default 0.110
                         ImGui::SliderFloat(oxorany("DELAY AUTO"), &Vars.FlyAutoDelay, 0.0f, 10.0f, "%.1f v"); // RIOSSM: 0..10 s, default 1.8 -> auto-off
+                        ImGui::Spacing();
+                        // AUTO SWAP (Elite port — SWAP_WEAPON.txt): slots 1<->2 kol 12 ms
+                        if (ImGui::Checkbox(oxorany("Button AUTO SWAP"), &Vars.AutoSwap)) gFltShow[FLTBTN_AUTOSWAP] = Vars.AutoSwap;
                         ImGui::Spacing();
                         ImGui::TextDisabled("Stop Time = freeze / DOWN COVER = nozol+flip / Ghost = underground");
                         ImGui::EndTabItem();
@@ -692,9 +693,8 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
-                        ImGui::TextDisabled("Fly V2 / Fly Op / JU FLY / Stop Time / Ghost / Tele Mark / Auto Mark");
-                        ImGui::TextDisabled("FLY AUTO = SPEED AUTO rise, DELAY AUTO s then auto-off");
-                        ImGui::TextDisabled("JU FLY = isGrounded -> true (jump w fly khdmo m3a b3dhom)");
+                        ImGui::TextDisabled("Fly V2 / Fly Op / Stop Time / Ghost / Tele Mark / Auto Mark");
+                        ImGui::TextDisabled("FLY AUTO = SPEED AUTO rise, DELAY AUTO s then auto-off + anti-fall (ex-JU FLY method)");
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "BAN RISK (ki9esso l'players):");
@@ -734,6 +734,7 @@ ImFont* Urbanist;
             RunGhost();
             RunMarkTP();
             RunAutoMark00(io.DeltaTime); // AUTO MARK 00 (RIOSSM autounderground): delay -> approach
+            RunAutoSwap(); // AUTO SWAP (Elite port): weapon slots 1<->2 every ~12 ms
             RunTelekill();
             StartAimkill(); // AIMKILL (zexisyy msg 106 + 108) — gated on Vars.AimKill
             RunResetGuest(); // Reset Guest config (login/lobby — runs always)

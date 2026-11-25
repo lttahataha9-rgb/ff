@@ -67,6 +67,7 @@ struct Vars_t
     bool DownCover = {};   // DOWN COVER (user snippet): sink 0.6 m/f (local 3.2 / enemy 1.8) + flip 180 X
     bool Ghost = {};       // GHOST (Elite Ghost Hack V4): underground + WaitForForceSync
     bool ResetGuest = {};  // RESET GUEST: unlock the game's own delete-guest option
+    bool AutoSwap = {};    // AUTO SWAP: alternate weapon slots 1<->2 every ~12 ms (Elite port)
 } Vars;
 
 class game_sdk_t
@@ -2717,6 +2718,37 @@ static Vector3 MarkedLoc()
 static void *g_rgKlass = nullptr;
 static void *(*g_rgStatics)(void *) = nullptr;
 static int g_rgState = 0; // 0 = retry, 1 = OK, -1 = il2cpp API missing
+// ---- AUTO SWAP: alternate weapon slots 1 <-> 2 every ~12 ms (Elite port) ----
+// (ported from ff.zip variant — SWAP_WEAPON.txt [8]). Gate = Vars.AutoSwap AND
+// master Vars.Enable. 12 ms rate limit = the whole trick; g_asLast written ONLY
+// after a successful swap so a failed tick does not eat the budget.
+void RunAutoSwap()
+{
+    static int g_asSlot = 1;
+    static std::chrono::steady_clock::time_point g_asLast{};
+    if (!Vars.AutoSwap || !Vars.Enable)
+    {
+        g_asSlot = 1;
+        return;
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_asLast).count() < 12)
+        return;
+    if (!AikInit())
+        return;
+    void *match = game_sdk->Curent_Match();
+    if (!match)
+        return;
+    void *local = game_sdk->GetLocalPlayer(match);
+    if (!local || game_sdk->get_IsDieing(local) || game_sdk->GetHp(local) <= 0)
+        return;
+    if (!aik.GetWeaponOnHand(local))
+        return; // no weapon in hand -> skip this tick
+    g_asSlot = (g_asSlot == 1) ? 2 : 1;
+    aik.SwapWeapon(local, g_asSlot, true, (void *)0);
+    g_asLast = now;
+}
+
 void RunResetGuest()
 {
     if (g_rgState == 0)
