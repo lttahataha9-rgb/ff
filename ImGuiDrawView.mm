@@ -521,8 +521,7 @@ ImFont* Urbanist;
                 case FLTBTN_STOPTIME:
                     DrawFloatingButton(i, oxorany("Stop Time"), &Vars.StopTime);
                     break;
-                case FLTBTN_FLYOP:
-                    DrawFloatingButton(i, oxorany("Fly Op"), &Vars.FlyOp);
+                case FLTBTN_FLYOP: // FLY OP option REMOVED (user "HYD LYA FLY OP") — slot kept for index alignment
                     break;
                 case FLTBTN_JUFLY: // JU FLY option REMOVED (user) — slot kept for index alignment
                     break;
@@ -632,11 +631,9 @@ ImFont* Urbanist;
                         if (ImGui::Checkbox(oxorany("AIMKILL"), &Vars.AimKill)) gFltShow[FLTBTN_AIMKILL] = Vars.AimKill; // zexisyy msg 106 + 108 (RIOSSM 360 removed)
                         ImGui::Spacing();
                         if (ImGui::Checkbox(oxorany("Button Stop Time"), &Vars.StopTime)) gFltShow[FLTBTN_STOPTIME] = Vars.StopTime; // own option (user: bouhdo)
-                        if (ImGui::BeginTable("splitm", 4))
+                        // FLY OP checkbox REMOVED (user "HYD LYA FLY OP") — FLTBTN_FLYOP slot kept
+                        if (ImGui::BeginTable("splitm", 2))
                         {
-                            ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Fly Op"), &Vars.FlyOp))
-                                gFltShow[FLTBTN_FLYOP] = Vars.FlyOp; // panel = latch dyal l'button f ecran
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
@@ -693,7 +690,7 @@ ImFont* Urbanist;
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
                         ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
-                        ImGui::TextDisabled("Fly V2 / Fly Op / Stop Time / Ghost / Tele Mark / Auto Mark");
+                        ImGui::TextDisabled("Fly V2 / Stop Time / Ghost / Tele Mark / Auto Mark");
                         ImGui::TextDisabled("FLY AUTO = SPEED AUTO rise, DELAY AUTO s then auto-off + anti-fall (ex-JU FLY method)");
                         ImGui::TextDisabled("offsets fail-closed: chet -> ghir matkhdemch");
                         ImGui::Spacing();
