@@ -840,38 +840,23 @@ ImFont* Urbanist;
             if (KA_IsSessionVerified()) {
             // Always draw the small floating CICADA toggle icon
             DrawMenuIconButton();
-            
-// top-centre screen watermark (user: "dirha ta wast l-ecran,
-            
-// wast l-fou9, ktbha") - always on, drawn over everything.
-            
-{
-            
-    ImDrawList *wdl = ImGui::GetForegroundDrawList();
-            
-    ImVec2 dsz = ImGui::GetIO().DisplaySize;
-            
-    const char *wmTxt = oxorany("External X");
-            
-    ImVec2 tsz = ImGui::CalcTextSize(wmTxt);
-            
-    float wx = (dsz.x - tsz.x) * 0.5f;
-            
-    const float wy = 6.0f;
-            
-    ImU32 wmSh = IM_COL32(0, 0, 0, 200);
-            
-    wdl->AddText(ImVec2(wx + 1.0f, wy), wmSh, wmTxt);
-            
-    wdl->AddText(ImVec2(wx - 1.0f, wy), wmSh, wmTxt);
-            
-    wdl->AddText(ImVec2(wx, wy + 1.0f), wmSh, wmTxt);
-            
-    wdl->AddText(ImVec2(wx, wy - 1.0f), wmSh, wmTxt);
-            
-    wdl->AddText(ImVec2(wx, wy), IM_COL32(255, 255, 255, 255), wmTxt);
-            
-}
+
+            // top-centre screen watermark (user: "dirha ta wast l-ecran,
+            // wast l-fou9, ktbha") - always on, drawn over everything.
+            {
+                ImDrawList *wdl = ImGui::GetForegroundDrawList();
+                ImVec2 dsz = ImGui::GetIO().DisplaySize;
+                const char *wmTxt = oxorany("External X");
+                ImVec2 tsz = ImGui::CalcTextSize(wmTxt);
+                float wx = (dsz.x - tsz.x) * 0.5f;
+                const float wy = 6.0f;
+                ImU32 wmSh = IM_COL32(0, 0, 0, 200);
+                wdl->AddText(ImVec2(wx + 1.0f, wy), wmSh, wmTxt);
+                wdl->AddText(ImVec2(wx - 1.0f, wy), wmSh, wmTxt);
+                wdl->AddText(ImVec2(wx, wy + 1.0f), wmSh, wmTxt);
+                wdl->AddText(ImVec2(wx, wy - 1.0f), wmSh, wmTxt);
+                wdl->AddText(ImVec2(wx, wy), IM_COL32(255, 255, 255, 255), wmTxt);
+            }
 
             // floating buttons: GHIR li n-active-hom f l'panel (gFltShow —
             // user: "mnin n'active hadi → tla3 lya l'boutonat f l'écran");
