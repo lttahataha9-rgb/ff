@@ -6,6 +6,7 @@
 #import "JHDragView.h"
 #import "ImGuiLoad.h"
 #import "ImGuiDrawView.h"
+#import "KeyAuth.h"
 @interface PubgLoad()
 @property (nonatomic, strong) ImGuiDrawView *vna;
 @end
@@ -35,11 +36,14 @@ static UIWindow *SafeHostWindow(void)
     [super load];
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        mainWindow = [UIApplication sharedApplication].keyWindow;
+        mainWindow = SafeHostWindow();
         extraInfo = [PubgLoad new];
-        // Mount the overlay view immediately; the floating CICADA icon inside
-        // ImGuiDrawView toggles the menu on/off with a single tap.
-        [extraInfo tapIconView2];
+        // Require valid KeyAuth license (from saved key or clipboard) before mounting the overlay view.
+        KA_StartSessionGate(^{
+            if (KA_IsSessionVerified()) {
+                [extraInfo tapIconView2];
+            }
+        });
     });
 }
 

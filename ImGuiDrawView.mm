@@ -30,6 +30,7 @@
 #import "IMGUI/zzz.h"
 #import "Hosts/NSObject+URL.h"
 #include "oxorany/oxorany_include.h"
+#include "Esp/KeyAuth.h"
 #import "Helper/Mem.h"
 #include "font.h"
 #import "Helper/Vector3.h"
@@ -76,8 +77,8 @@ static UIWindow *SafeHostWindow(void)
 // Telekill=mauve, Send=khadra, Auto/Tele Mark=orange/azr9 — user: "color
 // changes ONLY on the toggle switch"). Panel = plain checkbox (machi hada
 // li brit itbdel lounha).
-enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_UNDERGROUND = 11, FLTBTN_AUTOUNDER = 12, FLTBTN_AUTOSKY = 13, FLTBTN_COUNT = 14 };
-static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
+enum { FLTBTN_TELEKILL = 0, FLTBTN_FLYV2 = 1, FLTBTN_RUNN = 2, FLTBTN_AIMKILL = 3, FLTBTN_STOPTIME = 4, FLTBTN_FLYOP = 5, FLTBTN_FLYJUP = 6, FLTBTN_AUTOMARK = 7, FLTBTN_TELEMARK = 8, FLTBTN_DOWNKILL2 = 9, FLTBTN_GHOST = 10, FLTBTN_UNDERGROUND = 11, FLTBTN_AUTOUNDER = 12, FLTBTN_AUTOSKY = 13, FLTBTN_FLYAUTO = 14, FLTBTN_AUTO00 = 15, FLTBTN_COUNT = 16 };
+static bool gFltShow[FLTBTN_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false }; // panel checkbox latch
 
 struct FltBtnState {
     ImVec2 pos = ImVec2(0, 0);
@@ -132,6 +133,8 @@ static const ImVec4 kFltOnCol[FLTBTN_COUNT] = {
     ImVec4(1.00f, 0.38f, 0.15f, 1.00f), // UNDERGROUND - lava orange
     ImVec4(0.00f, 0.92f, 0.72f, 1.00f), // AUTOUNDER   - neon mint
     ImVec4(0.18f, 0.85f, 1.00f, 1.00f), // AUTOSKY     - neon sky blue
+    ImVec4(1.00f, 0.35f, 0.70f, 1.00f), // FLYAUTO     - wardi (pink, fly family)
+    ImVec4(0.15f, 0.95f, 0.45f, 1.00f), // AUTO00      - neon green
 };
 
 // panel design: tab SETTINGS -> ColorEdit4 loun dyal l'panel (user nkhtar)
@@ -318,7 +321,13 @@ static void LoadAutoSaveConfig(void)
     Vars.DownKillV2 = false;
     Vars.Ghost = false;
     Vars.UnderGround = false;
-    Vars.AutoUnder = d->autoUnder;
+    Vars.UnderKill = false;
+    Vars.AutoUnder = false;
+    gFltShow[FLTBTN_DOWNKILL2] = false;
+    gFltShow[FLTBTN_AUTOUNDER] = false;
+    gFltShow[FLTBTN_FLYOP] = false;   // FLY OP option removed
+    gFltShow[FLTBTN_FLYJUP] = false;  // FLY JUMP option removed
+    gFltShow[FLTBTN_GHOST] = false;   // GHOST option removed
     Vars.AutoSky = d->autoSky;
     Vars.ResetGuest = false; // never auto-reset guest on launch
     Vars.flySpeed = d->flySpeed;
@@ -589,6 +598,13 @@ static void DrawFloatingButton(int idx, const char *label, bool *v)
 }
 @end
 
+static void LoadAutoFeatureDefaults(void) {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    Vars.UgAutoMark = [d boolForKey:@"show_autounder"];
+    if ([d objectForKey:@"vitground"]) Vars.UgVitground = fminf(fmaxf([d floatForKey:@"vitground"], 0.0f), 1.0f);
+    if ([d objectForKey:@"MARK_delay"]) Vars.UgMarkDelay = fmaxf([d floatForKey:@"MARK_delay"], 0.01f);
+}
+
 @interface ImGuiDrawView () <MTKViewDelegate>
 @property (nonatomic, strong) id <MTLDevice> device;
 @property (nonatomic, strong) id <MTLCommandQueue> commandQueue;
@@ -677,20 +693,21 @@ ImFont* Urbanist;
     pixel_smol = io.Fonts->AddFontFromMemoryTTF((void*)smallestpixel, sizeof smallestpixel, 10*2, NULL, io.Fonts->GetGlyphRangesCyrillic());
     ImGui_ImplMetal_Init(_device);
 
-    // Create Metal texture for the uploaded CICADA icon (32x32 RGBA8)
+    // Create Metal texture for the uploaded CICADA icon (64x64 RGBA8)
+    // 64x64 = External X logo (user: "tbddl l-icon b l-image X")
     if (!gCicadaIconTex && _device) {
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                                      width:32
-                                                                                     height:32
+                                                                                      width:64
+                                                                                     height:64
                                                                                   mipmapped:NO];
         td.usage = MTLTextureUsageShaderRead;
         td.storageMode = MTLStorageModeShared;
         gCicadaIconTex = [_device newTextureWithDescriptor:td];
         if (gCicadaIconTex) {
-            [gCicadaIconTex replaceRegion:MTLRegionMake2D(0, 0, 32, 32)
+            [gCicadaIconTex replaceRegion:MTLRegionMake2D(0, 0, 64, 64)
                               mipmapLevel:0
                                 withBytes:kCicadaIconRGBA
-                              bytesPerRow:32 * 4];
+                              bytesPerRow:64 * 4];
         }
     }
 
@@ -730,7 +747,7 @@ ImFont* Urbanist;
     self.mtkView.clearColor = MTLClearColorMake(0, 0, 0, 0);
     self.mtkView.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0];
     self.mtkView.clipsToBounds = YES;
-
+    LoadAutoFeatureDefaults();
 }
 
 
@@ -820,6 +837,11 @@ ImFont* Urbanist;
     CGFloat y = (menuSize.height - 360) / 2;
     disp.width = io.DisplaySize.x;   // was never set -> Arrow ESP bounds were wrong
     disp.height = io.DisplaySize.y;
+            static uint32_t s_integrityTick = 0;
+            if ((++s_integrityTick % 300) == 1) {
+                KA_VerifyRuntimeIntegrity();
+            }
+            if (KA_IsSessionVerified()) {
             // Always draw the small floating CICADA toggle icon
             DrawMenuIconButton();
 
@@ -850,11 +872,9 @@ ImFont* Urbanist;
                 case FLTBTN_STOPTIME:
                     DrawFloatingButton(i, oxorany("Stop Time"), &Vars.StopTime);
                     break;
-                case FLTBTN_FLYOP:
-                    DrawFloatingButton(i, oxorany("Fly Op"), &Vars.FlyOp);
+                case FLTBTN_FLYOP:   // FLY OP removed from panel (user: "HYD L OPTION T ... FLY OP")
                     break;
-                case FLTBTN_FLYJUP:
-                    DrawFloatingButton(i, oxorany("Fly Jump"), &Vars.FlyJump);
+                case FLTBTN_FLYJUP:  // FLY JUMP removed from panel (user: "HYD L OPTION T ... FLY JUMP")
                     break;
                 case FLTBTN_AUTOMARK:
                     DrawFloatingButton(i, oxorany("Auto Mark"), &Vars.AutoMark);
@@ -865,17 +885,22 @@ ImFont* Urbanist;
                 case FLTBTN_DOWNKILL2:
                     DrawFloatingButton(i, oxorany("Down Kill V2"), &Vars.DownKillV2);
                     break;
-                case FLTBTN_GHOST:
-                    DrawFloatingButton(i, oxorany("Ghost"), &Vars.Ghost);
+                case FLTBTN_GHOST:   // GHOST removed from panel (user: "HYD L OPTION T GHOST")
                     break;
                 case FLTBTN_UNDERGROUND:
-                    DrawFloatingButton(i, oxorany("Under"), &Vars.UnderGround);
+                    DrawFloatingButton(i, oxorany("Under Kill"), &Vars.UnderKill);
                     break;
                 case FLTBTN_AUTOUNDER:
                     DrawFloatingButton(i, oxorany("Auto Under"), &Vars.AutoUnder);
                     break;
                 case FLTBTN_AUTOSKY:
                     DrawFloatingButton(i, oxorany("Auto Sky"), &Vars.AutoSky);
+                    break;
+                case FLTBTN_FLYAUTO:
+                    DrawFloatingButton(i, oxorany("FLYAUTO"), &Vars.FlyAuto);
+                    break;
+                case FLTBTN_AUTO00:
+                    DrawFloatingButton(i, oxorany("Auto 00"), &Vars.UgAutoMark);
                     break;
                 }
             }
@@ -893,7 +918,7 @@ ImFont* Urbanist;
                 ImGui::PushStyleColor(ImGuiCol_SliderGrab, accVec);
                 ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, accVec);
 
-                ImGui::Begin(oxorany("  CICADA  |  FreeFire 1.132.X  ##cicada_main"), &MenDeal, ImGuiWindowFlags_NoCollapse);
+                ImGui::Begin(oxorany("  EXTRERNAL X  |  FreeFire 1.132.X  ##extrernal_main"), &MenDeal, ImGuiWindowFlags_NoCollapse);
 
                 // Custom CICADA Banner Header with embedded logo + neon accent divider
                 {
@@ -917,7 +942,7 @@ ImFont* Urbanist;
                                              IM_COL32(255, 255, 255, 255), 6.0f);
                         textX = p.x + 46.0f;
                     }
-                    wdl->AddText(ImVec2(textX, p.y + 5.0f), accU32, oxorany("CICADA ENGINE"));
+                    wdl->AddText(ImVec2(textX, p.y + 5.0f), accU32, oxorany("EXTRERNAL X ENGINE"));
                     wdl->AddText(ImVec2(textX, p.y + 20.0f), IM_COL32(180, 195, 210, 215), oxorany("VIP EDITION  •  v1.132.X"));
 
                     // Status pill on the right
@@ -1014,30 +1039,27 @@ ImFont* Urbanist;
                         if (ImGui::BeginTable("splitm", 3))
                         {
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Fly Op"), &Vars.FlyOp))
-                                gFltShow[FLTBTN_FLYOP] = Vars.FlyOp;
-                            ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Fly Jump"), &Vars.FlyJump))
-                                gFltShow[FLTBTN_FLYJUP] = Vars.FlyJump;
-                            ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Tele Mark"), &Vars.TeleMark)) gFltShow[FLTBTN_TELEMARK] = Vars.TeleMark;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Auto Mark"), &Vars.AutoMark)) gFltShow[FLTBTN_AUTOMARK] = Vars.AutoMark;
                             ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Down V2"), &Vars.DownKillV2)) gFltShow[FLTBTN_DOWNKILL2] = Vars.DownKillV2;
-                            ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Ghost"), &Vars.Ghost)) gFltShow[FLTBTN_GHOST] = Vars.Ghost;
-                            ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Under Ground"), &Vars.UnderGround)) gFltShow[FLTBTN_UNDERGROUND] = Vars.UnderGround;
-                            ImGui::TableNextColumn();
-                            if (ImGui::Checkbox(oxorany("Auto Under"), &Vars.AutoUnder)) gFltShow[FLTBTN_AUTOUNDER] = Vars.AutoUnder;
+                            if (ImGui::Checkbox(oxorany("Under Kill"), &Vars.UnderKill)) gFltShow[FLTBTN_UNDERGROUND] = Vars.UnderKill;
                             ImGui::TableNextColumn();
                             if (ImGui::Checkbox(oxorany("Auto Sky"), &Vars.AutoSky)) gFltShow[FLTBTN_AUTOSKY] = Vars.AutoSky;
+                            ImGui::TableNextColumn();
+                            if (ImGui::Checkbox(oxorany("Auto 00"), &Vars.UgAutoMark)) {
+                                gFltShow[FLTBTN_AUTO00] = Vars.UgAutoMark;
+                                [[NSUserDefaults standardUserDefaults] setBool:Vars.UgAutoMark forKey:@"show_autounder"];
+                            }
                         }
                         ImGui::EndTable();
-                        ImGui::SliderFloat(oxorany("Under Depth"), &Vars.UgDepth, 1.0f, 6.0f, "%.1f m");
-                        ImGui::TextDisabled("Auto Under = starts automatically when round begins (phase 2)");
-                        ImGui::TextDisabled("Stop Time = freeze | Down = ta7t l'ard | Ghost = underground");
+                        if (ImGui::SliderFloat(oxorany("Vitesse"), &Vars.UgVitground, 0.0f, 1.0f, "%.3f")) {
+                            [[NSUserDefaults standardUserDefaults] setFloat:Vars.UgVitground forKey:@"vitground"];
+                        }
+                        if (ImGui::Checkbox(oxorany("Button FLYAUTO"), &Vars.FlyAuto)) gFltShow[FLTBTN_FLYAUTO] = Vars.FlyAuto;
+                        ImGui::SliderFloat(oxorany("SPEED AUTO"), &Vars.FlyAutoSpeed, 0.0f, 0.5f, "%.2f v");
+                        ImGui::SliderFloat(oxorany("DELAY AUTO"), &Vars.FlyAutoDelay, 0.0f, 10.0f, "%.1f v");
+                        ImGui::TextDisabled("Stop Time = freeze | Under Kill = underground");
                         ImGui::TextDisabled("Mark: %d  |  ST: %.5f", g_markDbg, g_stDeltaShow);
                         ImGui::EndTabItem();
                     }
@@ -1055,14 +1077,14 @@ ImFont* Urbanist;
                             ResetDefaultConfig();
                         }
                         ImGui::Spacing();
-                        DrawSection(oxorany("CICADA THEME CUSTOMIZER"));
+                        DrawSection(oxorany("EXTRERNAL X THEME CUSTOMIZER"));
                         ImGui::ColorEdit4("Panel Background", g_panelCol);
                         ImGui::ColorEdit4("Accent Neon", g_accentCol);
                         ImGui::Spacing();
                         ImGui::Text("Theme Presets:");
                         struct ThemePreset { const char *name; ImVec4 bg; ImVec4 acc; };
                         static const ThemePreset kPresets[5] = {
-                            {"Cicada Cyber", {0.06f, 0.06f, 0.09f, 0.96f}, {0.00f, 0.88f, 0.96f, 1.00f}},
+                            {"Extrernal X Cyber", {0.06f, 0.06f, 0.09f, 0.96f}, {0.00f, 0.88f, 0.96f, 1.00f}},
                             {"Amethyst VIP", {0.08f, 0.05f, 0.12f, 0.96f}, {0.75f, 0.32f, 1.00f, 1.00f}},
                             {"Crimson Blood",{0.10f, 0.05f, 0.06f, 0.96f}, {1.00f, 0.22f, 0.35f, 1.00f}},
                             {"Emerald Venom",{0.05f, 0.09f, 0.07f, 0.96f}, {0.15f, 0.95f, 0.55f, 1.00f}},
@@ -1085,29 +1107,64 @@ ImFont* Urbanist;
                     }
                     if (ImGui::BeginTabItem(("  INFO  "))) {
                         ImGui::Spacing();
-                        DrawSection(oxorany("ABOUT CICADA"));
-                        ImGui::TextColored(ImVec4(g_accentCol[0], g_accentCol[1], g_accentCol[2], 1.00f), "CICADA VIP PANEL");
-                        ImGui::Text("Target: FreeFire 1.132.X");
-                        ImGui::Spacing();
-                        DrawSection(oxorany("SECURITY & ACCOUNT"));
-                        ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "SAFE FONCTIONS (crash-free):");
-                        ImGui::TextDisabled("ESP / Aimbot - client only (safest)");
-                        ImGui::TextDisabled("Fly V2 / Fly Op / Fly Jump / Stop Time / Ghost / Tele Mark");
-                        ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(1.00f, 0.55f, 0.25f, 1.00f), "HIGH RISK (ki9esso l'players):");
-                        ImGui::TextDisabled("AimKill / Telekill / Down Kill V2");
-                        ImGui::Spacing();
-                        ImGui::Checkbox("RESET GUEST (unlock game option + MSDK reset)", &Vars.ResetGuest);
-                        if (ImGui::Button("Force Reset Guest Account Now")) {
-                            Vars.ResetGuest = true;
-                            ExecuteDirectGuestReset();
+                        {
+                            ImDrawList *idl = ImGui::GetWindowDrawList();
+                            ImVec2 cp = ImGui::GetCursorScreenPos();
+                            float cw = ImGui::GetContentRegionAvail().x;
+                            float ch = 52.0f;
+                            ImU32 accU = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 255);
+                            ImU32 bgL  = IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 38);
+                            ImU32 bgR  = IM_COL32(18, 22, 30, 220);
+                            idl->AddRectFilledMultiColor(cp, ImVec2(cp.x + cw, cp.y + ch), bgL, bgR, bgR, bgL);
+                            idl->AddRect(cp, ImVec2(cp.x + cw, cp.y + ch), IM_COL32((int)(g_accentCol[0] * 255), (int)(g_accentCol[1] * 255), (int)(g_accentCol[2] * 255), 110), 8.0f, 0, 1.2f);
+                            idl->AddRectFilled(cp, ImVec2(cp.x + 4.0f, cp.y + ch), accU, 4.0f);
+
+                            idl->AddText(ImVec2(cp.x + 14.0f, cp.y + 9.0f), accU, oxorany("EXTRERNAL X VIP"));
+                            idl->AddText(ImVec2(cp.x + 14.0f, cp.y + 28.0f), IM_COL32(215, 225, 240, 235), oxorany("DEV BY RUSI X LMT"));
+
+                            ImGui::Dummy(ImVec2(cw, ch + 4.0f));
                         }
-                        if (g_rgState == 1)
-                            ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.45f, 1.00f), "Reset Guest Active: option 'Reset Guest' unlocked + MSDK ready");
-                        else if (g_rgState == -1)
-                            ImGui::TextDisabled("MSDK Direct Reset ready (use Force Reset button)");
-                        else
-                            ImGui::TextDisabled("config: initializing...");
+
+                        ImGui::Spacing();
+                        DrawSection(oxorany("OFFICIAL CHANNELS"));
+                        ImGui::Spacing();
+
+                        float btnW = ImGui::GetContentRegionAvail().x;
+                        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.0f);
+
+                        // Telegram Channel Button
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.11f, 0.56f, 0.84f, 0.90f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.65f, 0.94f, 1.00f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.08f, 0.45f, 0.70f, 1.00f));
+                        if (ImGui::Button(oxorany("Telegram  •  t.me/crackallcheat"), ImVec2(btnW, 34.0f))) {
+                            NSURLComponents *c = [[NSURLComponents alloc] init];
+                            c.scheme = @"https";
+                            c.host = @"t.me";
+                            c.path = @"/crackallcheat";
+                            NSURL *u = c.URL;
+                            if (u) [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
+                        }
+                        ImGui::PopStyleColor(3);
+
+                        ImGui::Spacing();
+
+                        // Discord Server Button
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.35f, 0.40f, 0.95f, 0.90f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.42f, 0.47f, 1.00f, 1.00f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.28f, 0.32f, 0.82f, 1.00f));
+                        if (ImGui::Button(oxorany("Discord  •  discord.gg/UM2Z5DnUuy"), ImVec2(btnW, 34.0f))) {
+                            NSURLComponents *c = [[NSURLComponents alloc] init];
+                            c.scheme = @"https";
+                            c.host = @"discord.gg";
+                            c.path = @"/UM2Z5DnUuy";
+                            NSURL *u = c.URL;
+                            if (u) [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
+                        }
+                        ImGui::PopStyleColor(3);
+
+                        ImGui::PopStyleVar();
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("%s", oxorany("Tap a button above to join our community."));
                         ImGui::EndTabItem();
                     }
                     ImGui::EndTabBar();
@@ -1132,10 +1189,13 @@ ImFont* Urbanist;
                     RunFlyV2();
                     RunFlyOp(io.DeltaTime); // FLY OP (user snippet, dt-based rise)
                     RunFlyJump(io.DeltaTime); // FLY JUMP (Elite HighJump: jump held + lift)
+                    RunFlyAuto(io.DeltaTime); // FLY AUTO (ESign-safe timed air-lift + XZ steer)
                     RunStopTime();
                     RunDownKillV2();
                     RunGhost();
                     RunUnderGround();
+                    RunUnderKill();
+                    RunUndergroundAutoMark();
                     RunTelekill();
                     StartAimkill();
                     RunResetGuest();
@@ -1146,6 +1206,7 @@ ImFont* Urbanist;
             } else {
                 Vars.isAimFov = false;
             }
+            } // end KA_IsSessionVerified()
             ImGui::Render();
             ImDrawData* draw_data = ImGui::GetDrawData();
             ImGui_ImplMetal_RenderDrawData(draw_data, commandBuffer, renderEncoder);
